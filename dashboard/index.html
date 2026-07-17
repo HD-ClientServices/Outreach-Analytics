@@ -1,17 +1,17 @@
 <!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Outreach Analytics · Intro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-/* Tokens del design system de Intro (tryintro.com) */
+/* Tokens from Intro's design system (tryintro.com) */
 :root{
   --background:#ffffff; --surface:#fdfcfc; --card:#f5f3f1; --card-2:#efece8;
   --foreground:#171717; --muted:rgba(0,0,0,.6); --muted-2:rgba(0,0,0,.45);
   --border:#e5e7eb; --border-side:rgba(0,0,0,.05);
   --accent:#000000; --accent-fg:#ffffff; --highlight:#fef8d4;
-  --green:#16a34a;
+  --green:#16a34a; --danger:#dc2626;
   --font-sans:'Inter',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
   --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --radius:12px; --radius-lg:24px; --container:1152px;
@@ -36,7 +36,6 @@ tr:last-child td{border-bottom:none}
 tbody tr:hover{background:var(--surface)}
 .num{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:13.5px}
 .seqname{font-weight:500;font-size:14.5px;letter-spacing:-.01em}
-.seqname small{display:block;color:var(--muted-2);font-size:11.5px;font-weight:400;margin-top:3px}
 .crcell{display:flex;align-items:center;gap:12px}
 .crval{font-family:var(--font-mono);font-weight:700;font-size:14px;min-width:54px;text-align:right;font-variant-numeric:tabular-nums}
 .track{flex:1;height:8px;border-radius:4px;background:var(--card-2);overflow:hidden;min-width:70px}
@@ -44,7 +43,7 @@ tbody tr:hover{background:var(--surface)}
 .pos{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 7px;border-radius:7px;background:var(--card);font-family:var(--font-mono);font-size:12px;font-weight:500}
 .frase{line-height:1.5;font-size:13.5px;max-width:560px}
 .controls{display:flex;gap:22px;align-items:center;flex-wrap:wrap}
-.grp{display:flex;gap:7px;align-items:center}
+.grp{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-2);font-weight:500;margin-right:3px}
 .pill{padding:7px 15px;border-radius:999px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--background);color:var(--muted);user-select:none;transition:all .15s}
 .pill:hover{border-color:rgba(0,0,0,.25);color:var(--foreground)}
@@ -57,95 +56,107 @@ tbody tr:hover{background:var(--surface)}
 </style></head>
 <body><div class="wrap">
 <h1>Outreach <em>analytics</em>.</h1>
-<div class="sub">Rendimiento por secuencia · Live transfers ÷ contactos ingresados</div>
+<div class="sub">Performance by sequence · Live transfers ÷ contacts entered</div>
 <div class="stamp" id="stamp"></div>
-<div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Cargando…</div></div>
+<div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
 <div class="foot" id="foot"></div>
 </div>
 <script>
 var EP="https://ouszjnrkawvrwxjjgrxx.supabase.co/functions/v1/outreach-analytics";
 var TOKEN=new URLSearchParams(location.search).get("token")||"";
 var DATA=null;
-// El orden A/B/C es el que se uso al validar la estructura.
-var ORDER=["cc","cold","defdec"], LETTER={cc:"A",cold:"B",defdec:"C"};
+var ORDER=["cc","cold","defdec"];
 var ST={win:30, tab:"cc", sort:"pos", metric:"reply"};
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
-function nf(v){return v==null?'<span class="nd">—</span>':v.toLocaleString("es-CL")}
+function nf(v){return v==null?'<span class="nd">—</span>':v.toLocaleString("en-US")}
 function ago(iso){if(!iso)return"";var h=(Date.now()-new Date(iso).getTime())/3600000;
   if(h<1)return Math.round(h*60)+" min";if(h<48)return Math.round(h)+" h";return Math.round(h/24)+" d"}
-function bar(v,mx){
+function bar(v,mx,col){
   if(v==null)return '<div class="crcell"><span class="crval nd">—</span><div class="track"></div></div>';
   return '<div class="crcell"><span class="crval">'+v+'%</span><div class="track"><div class="fill" style="width:'
-    +Math.max(mx?v/mx*100:0,3)+'%"></div></div></div>';
+    +Math.max(mx?v/mx*100:0,3)+'%'+(col?';background:'+col:'')+'"></div></div></div>';
 }
 function W(){return (DATA&&DATA.windows&&DATA.windows[ST.win])||null}
-function metricOf(m){return ST.metric==="reply"?m.replyRate:m.ltRate}
+function metricOf(m){return ST.metric==="reply"?m.replyRate:ST.metric==="lt"?m.ltRate:m.dndRate}
+function countOf(m){return ST.metric==="reply"?m.replies:ST.metric==="lt"?m.lts:m.dnds}
+function metricName(){return ST.metric==="reply"?"Responses":ST.metric==="lt"?"Live transfers":"DNDs"}
+// Real sequence name (the exact GHL workflow label), used in the table AND the tabs.
+function seqName(k){
+  var w=W(); if(w){var s=(w.sequences||[]).filter(function(x){return x.key==k})[0]; if(s&&s.label) return s.label;}
+  return k;
+}
 
 function render(){
-  var w=W(); if(!w){document.getElementById("app").innerHTML='<div class="note">Sin datos para esta ventana.</div>';return}
+  var w=W(); if(!w){document.getElementById("app").innerHTML='<div class="note">No data for this window.</div>';return}
   var H="";
-  H+='<div class="controls" style="margin-top:22px"><div class="grp"><span class="lbl">Ventana</span><div class="grp" id="wins"></div></div></div>';
-  H+='<div class="sec"><h2>Rendimiento general × secuencia</h2><div class="h">LT ÷ contactos ingresados · ordenado por CR</div>'
-   + '<div class="card"><table><thead><tr><th style="width:290px">Secuencia</th><th class="num" style="width:80px">LT</th>'
-   + '<th class="num" style="width:170px">Contactos ingresados</th><th>CR de secuencia</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
-  H+='<div class="sec"><h2>Mensajes</h2><div class="h" id="msgh"></div>'
-   + '<div class="controls" style="margin-bottom:16px">'
-   + '<div class="grp"><span class="lbl">Métrica</span><div class="grp" id="metrics"></div></div>'
-   + '<div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div>'
-   + '<div class="grp"><span class="lbl">Secuencia</span><div class="grp" id="tabs"></div></div></div>'
-   + '<div class="card"><table><thead><tr><th class="num" style="width:70px">SMS #</th><th>Frase</th>'
-   + '<th class="num" style="width:90px">Enviados</th><th style="width:200px" id="crh">CR</th></tr></thead><tbody id="t2"></tbody></table></div></div>';
+  H+='<div class="controls" style="margin-top:22px"><div class="grp"><span class="lbl">Window</span><div class="grp" id="wins"></div></div></div>';
+  H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate</div>'
+   + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
+   + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
+  H+='<div class="sec"><h2>Messages</h2><div class="h" id="msgh"></div>'
+   + '<div class="controls" style="margin-bottom:14px">'
+   + '<div class="grp"><span class="lbl">Metric</span><div class="grp" id="metrics"></div></div>'
+   + '<div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div></div>'
+   + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Sequence</span><div class="grp" id="tabs"></div></div></div>'
+   + '<div class="card"><table><thead><tr><th class="num" style="width:66px">SMS #</th><th>Message</th>'
+   + '<th class="num" style="width:80px">Sent</th><th class="num" style="width:120px" id="cnth">Responses</th>'
+   + '<th style="width:180px" id="crh">Response rate</th></tr></thead><tbody id="t2"></tbody></table></div></div>';
   document.getElementById("app").innerHTML=H;
   wins();t1();pills();t2();
-  document.getElementById("stamp").textContent="Datos de hace "+ago(DATA.snapshotAt||DATA.generatedAt)+" · ventana "+ST.win+" días";
+  document.getElementById("stamp").textContent="Data from "+ago(DATA.snapshotAt||DATA.generatedAt)+" ago · "+ST.win+"-day window";
   var u=w.unidentified||{ing:0,lt:0};
-  document.getElementById("foot").innerHTML="Fuente: GoHighLevel API v2 (solo lectura) · esquema sms_analytics<br>"
-    +"Fuera de las 3 secuencias: "+nf(u.ing)+" contactos · "+nf(u.lt)+" LT (otros workflows o envíos manuales)";
+  document.getElementById("foot").innerHTML="Source: GoHighLevel API v2 (read-only) · sms_analytics schema<br>"
+    +"Outside the 3 sequences: "+nf(u.ing)+" contacts · "+nf(u.lt)+" LT (other workflows or manual sends)";
 }
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
-  return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' días</span>'}).join("")}
+  return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}
 function t1(){
   var rows=(W().sequences||[]).slice().sort(function(a,b){return (b.cr==null?-1:b.cr)-(a.cr==null?-1:a.cr)});
   var mx=Math.max.apply(null,rows.map(function(r){return r.cr||0}).concat([1]));
   document.getElementById("t1").innerHTML=rows.map(function(s){
-    var chico=s.ing!=null&&s.ing<50?'<span class="chip">muestra chica</span>':'';
-    return '<tr><td><div class="seqname">Secuencia '+LETTER[s.key]+chico+'<small>'+esc(s.label)+'</small></div></td>'
+    var small=s.ing!=null&&s.ing<50?'<span class="chip">small sample</span>':'';
+    return '<tr><td><div class="seqname">'+esc(s.label)+small+'</div></td>'
       +'<td class="num">'+nf(s.lt)+'</td><td class="num">'+nf(s.ing)+'</td><td>'+bar(s.cr,mx)+'</td></tr>';
-  }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">Sin datos.</td></tr>';
+  }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">No data.</td></tr>';
 }
 function pills(){
   document.getElementById("metrics").innerHTML=
-    '<span class="pill'+(ST.metric=="reply"?' on':'')+'" onclick="ST.metric=\'reply\';pills();t2()">Respuestas</span>'
-   +'<span class="pill'+(ST.metric=="lt"?' on':'')+'" onclick="ST.metric=\'lt\';pills();t2()">Live transfers</span>';
+    '<span class="pill'+(ST.metric=="reply"?' on':'')+'" onclick="ST.metric=\'reply\';pills();t2()">Responses</span>'
+   +'<span class="pill'+(ST.metric=="lt"?' on':'')+'" onclick="ST.metric=\'lt\';pills();t2()">Live transfers</span>'
+   +'<span class="pill'+(ST.metric=="dnd"?' on':'')+'" onclick="ST.metric=\'dnd\';pills();t2()">DND</span>';
   document.getElementById("sorts").innerHTML=
-    '<span class="pill'+(ST.sort=="pos"?' on':'')+'" onclick="ST.sort=\'pos\';pills();t2()">Posición</span>'
-   +'<span class="pill'+(ST.sort=="cr"?' on':'')+'" onclick="ST.sort=\'cr\';pills();t2()">Conversión</span>';
+    '<span class="pill'+(ST.sort=="pos"?' on':'')+'" onclick="ST.sort=\'pos\';pills();t2()">Position</span>'
+   +'<span class="pill'+(ST.sort=="cr"?' on':'')+'" onclick="ST.sort=\'cr\';pills();t2()">Conversion</span>';
   document.getElementById("tabs").innerHTML=ORDER.map(function(k){
-    return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';pills();t2()">'+LETTER[k]+'</span>'}).join("");
+    return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';pills();t2()">'+esc(seqName(k))+'</span>'}).join("");
 }
 function t2(){
   var w=W(), rows=((w.msgs||{})[ST.tab]||[]).slice();
   if(ST.sort=="pos") rows.sort(function(a,b){return a.pos-b.pos});
   else rows.sort(function(a,b){return metricOf(b)-metricOf(a)});
   var mx=Math.max.apply(null,rows.map(metricOf).concat([0.0001]));
-  document.getElementById("crh").textContent = ST.metric=="reply" ? "Respuestas ÷ enviados" : "LT ÷ enviados";
+  document.getElementById("cnth").textContent = metricName();
+  document.getElementById("crh").textContent = ST.metric=="reply" ? "Response rate" : ST.metric=="lt" ? "Live transfer rate" : "DND rate";
   document.getElementById("msgh").textContent = ST.metric=="reply"
-    ? "Qué frase engancha: de cada 100 veces que se envió, cuántas tuvieron respuesta. Solo frases con 5+ envíos."
-    : "De cada 100 veces que se envió, cuántas terminaron en live transfer. Solo frases con 5+ envíos.";
+    ? "Which message hooks: of every 100 times it was sent, how many got a reply. Only messages with 5+ sends."
+    : ST.metric=="lt"
+    ? "Of every 100 times it was sent, how many ended in a live transfer. Only messages with 5+ sends."
+    : "Which message burns the list: of every 100 times it was sent, how many opted out (DND). Lower is better. Only messages with 5+ sends.";
   document.getElementById("t2").innerHTML=rows.map(function(m){
     return '<tr><td class="num"><span class="pos">'+m.pos+'</span></td>'
       +'<td><div class="frase">'+esc(m.tmpl)+'</div></td>'
       +'<td class="num">'+nf(m.sends)+'</td>'
-      +'<td>'+bar(metricOf(m),mx)+'</td></tr>';
-  }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">Sin frases con 5+ envíos en esta ventana.</td></tr>';
+      +'<td class="num">'+nf(countOf(m))+'</td>'
+      +'<td>'+bar(metricOf(m),mx,ST.metric=="dnd"?"var(--danger)":null)+'</td></tr>';
+  }).join("")||'<tr><td colspan="5" class="nd" style="padding:20px">No messages with 5+ sends in this window.</td></tr>';
 }
 fetch(EP+"?action=data&token="+encodeURIComponent(TOKEN))
   .then(function(r){return r.json()})
   .then(function(d){
-    if(d.error){document.getElementById("app").innerHTML='<div class="note">Acceso no autorizado. Revisá el token del enlace.</div>';return}
-    if(d.empty){document.getElementById("app").innerHTML='<div class="note">Todavía no hay datos: la extracción no terminó.</div>';return}
+    if(d.error){document.getElementById("app").innerHTML='<div class="note">Unauthorized. Check the token in the link.</div>';return}
+    if(d.empty){document.getElementById("app").innerHTML='<div class="note">No data yet: the extraction hasn\'t finished.</div>';return}
     DATA=d;render();
   })
-  .catch(function(e){document.getElementById("app").innerHTML='<div class="note">Error cargando datos: '+esc(String(e))+'</div>'});
+  .catch(function(e){document.getElementById("app").innerHTML='<div class="note">Error loading data: '+esc(String(e))+'</div>'});
 </script></body></html>

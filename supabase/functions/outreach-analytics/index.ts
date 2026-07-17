@@ -8,14 +8,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ---- Las 3 secuencias -------------------------------------------------------
 // GHL no manda workflowId en los mensajes. Se atribuye el CONTACTO por su
 // PRIMER SMS outbound comparado contra el SMS 1 de cada workflow.
-// Patrones calibrados 17/07/2026 contra los copies OFICIALES de GHL (SMS 1 de
-// cada secuencia). Frases distintivas, sin variables ({{...}}), asi el match es
-// igual sobre el body crudo o sobre el template normalizado.
-//   cc     -> "...regarding your {monto} in CC" / "this is Anna"       (siempre menciona "in CC")
-//   cold   -> "improve your weekly payments" / "Open to a quick call about your MCAs"
-//   defdec -> "just got your (MCA) file" + "default situation" | "qualify for an MCA"
-// NO son de estas 3 (workflows aparte, quedan 'none'): "from my personal number",
-// "About improving those CC terms", "we do MCA relief", "MCA pays itself first weekly", etc.
+// Patrones calibrados 17/07/2026 contra los copies OFICIALES de GHL.
 const WF: { key: string; label: string; re: RegExp }[] = [
   { key: "cc", label: "Partner CC · DebtMD v2",
     re: /\bin cc\b|this is anna/i },
@@ -28,6 +21,77 @@ function whichWorkflow(body?: string): string {
   const b = body || "";
   for (const w of WF) if (w.re.test(b)) return w.key;
   return "none";
+}
+
+// Firmantes/openers conocidos. Se normalizan a {opener} para agrupar el MISMO
+// mensaje con distinta firma (Maria/Camila/Sara/… = un solo mensaje).
+const OPENERS = /\b(maria|camila|sara|santiago|james|anna|smith|lewis|miller|martinez)\b/ig;
+
+// Copies OFICIALES de cada secuencia (los que Vicente cargó de GHL). Solo se
+// miden mensajes que pertenecen a la secuencia del contacto — el resto (p.ej.
+// "{nombre}?" de otra secuencia "name?") NO se cuenta.
+const OFFICIAL: Record<string, string[]> = {
+  cc: [
+    "Hi {nombre}, this is {opener}. We received your submission regarding your {monto} in CC. When's a good time for a quick call?",
+    "Hi {nombre}, did you see my last message? We received your submission and would love to review your options",
+    "Do you have 5 minutes today, or would tomorrow work better?",
+    "Hi {nombre}, just checking in. We saw you have about {monto} in CC. We'd love to see how we can help.",
+    "Would tomorrow be a good time for a quick call? We can work around your schedule.",
+    "Hi {nombre}, following up on your request. We saw you have about {monto} in CC and wanted to connect.",
+    "Are you still interested in reviewing your options? Just reply whenever you can.",
+    "{nombre}, if now isn't a good time, let me know when I should reach out.",
+    "Hi {nombre}, I wanted to check if you're still looking for help with your {monto} in CC",
+    "If you have 5 minutes today, we can go over everything together.",
+    "{nombre}, would you rather talk this afternoon or tomorrow?",
+    "Hi {nombre}, this is my last follow-up for now. If you'd still like us to review your {monto} in CC, just reply",
+    "Are you still interested? If now isn't the best time, let me know what works better.",
+    "Thanks, {nombre}! Whenever you're ready, just send me a message and we'll be happy to help.",
+  ],
+  cold: [
+    "Hi {nombre}, we may be able to improve your weekly payments. Open to a quick call about your MCAs? - {opener}",
+    "Hi {nombre}, my intention is simply to support you and help you feel less alone with your MCAs. - {opener}",
+    "Hi {nombre}, {opener} at Settlegroup, following up. We may be able to ease your payments quickly. Can I call you?",
+    "Hi {nombre}, we just helped a client improve terms on their MCAs payments. Can I give you a quick call now? - {opener}",
+    "{nombre}, we truly care about the people we work with and take their MCA situation seriously. Can I call you? - {opener}",
+    "Hi {nombre}, I've seen how heavy MCA payments can become without guidance. I want to help early. Just reply. - {opener}",
+    "{nombre}, I just want to make sure you have someone trustworthy to talk to. Just reply. - {opener}",
+    "Final note, {nombre}: if a brief call could help ease your MCA payments, just reply. I'm here to help. - {opener}",
+  ],
+  defdec: [
+    "Hi {nombre}, just got your MCA file. We're aware of your default situation and we'd like to help you. Can I call you now? - {opener}",
+    "Hi {nombre}, just got your file. We were informed you didn't qualify for an MCA. We can help you with that. Can I call you now? - {opener}",
+    "Just trying to avoid colections... Can I call you now?",
+    "We have a better option than an MCA... Can I call you now?",
+    "Btw we just got a great result for a client like you. Quick call to share it?",
+    "We help owners simplify what they pay each week. Can I call you?",
+    "Hi {nombre}, {opener} at Settlegroup. We would really like to help you get ahead of this. Can I call you now?",
+    "{nombre}?",
+    "Taking another MCA may not be the answer. Can I call you? - {opener}",
+    "GM {nombre}!, {opener} at Settlegroup. Another MCA may not fix this, but we may. Can I call you?",
+    "Any thoughts, {nombre}?",
+    "I'm honestly confused... My only goal is to share a solution with you. Can I call you now?",
+    "I'll try again tomorrow. Is that ok? Have a good one!",
+    "GM! Did you end up taking another MCA?",
+    "... Or any liens so far?",
+    "Can you give us a shot? Can I call you now?",
+    "Hi {nombre}, {opener} at Settlegroup again. We just got a great result for a client like you. Can I share it on a quick call?",
+  ],
+};
+// Clave por "esqueleto": toda variable ({nombre},{monto},{opener},{{...}}) -> 'v',
+// se tira el resto de puntuacion. Tolerante a firmas y a la glitch de {{día}}.
+function skel(t: string): string {
+  return (t || "").toLowerCase().replace(/\{+[^{}]*\}+/g, "v").replace(/[^a-z0-9]/g, "");
+}
+const OFFICIAL_KEYS: Record<string, Set<string>> = {};
+// skel -> texto oficial canonico (para agrupar todas las variantes en 1 fila y
+// mostrar el copy oficial limpio, sin firmas ni glitches de normalizacion).
+const OFF_TEXT: Record<string, Record<string, string>> = {};
+for (const k of Object.keys(OFFICIAL)) {
+  OFFICIAL_KEYS[k] = new Set(OFFICIAL[k].map(skel));
+  OFF_TEXT[k] = {}; for (const m of OFFICIAL[k]) OFF_TEXT[k][skel(m)] = m;
+}
+function isOfficial(wf: string, tmpl: string): boolean {
+  const set = OFFICIAL_KEYS[wf]; return !!set && set.has(skel(tmpl));
 }
 
 function dbClient() { return new Client(Deno.env.get("SUPABASE_DB_URL")!); }
@@ -66,6 +130,9 @@ function tmplOf(body?: string, name?: string) {
   t = t.replace(/\b\d[\d,\.]*\s*(k|\/day|\/month|\/mo|\/wk|\/week)\b/ig, "{monto}");
   t = t.replace(/\b(mon|tue|wed|thu|fri|sat|sun)\w*\b/ig, "{día}");
   t = t.replace(/\b\d{1,2}:\d{2}\s*(am|pm)?|\b\d{1,2}\s*(am|pm)\b/ig, "{hora}");
+  // Firma del opener -> {opener} (agrupa mismo mensaje con distinto remitente).
+  t = t.replace(OPENERS, "{opener}");
+  t = t.replace(/\{opener\}(\s+\{opener\})+/g, "{opener}");
   t = t.replace(/\{nombre\}(\s+\{nombre\})+/g, "{nombre}");
   return t.replace(/\s+/g, " ").trim();
 }
@@ -174,27 +241,23 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
       const wf = whichWorkflow(firstOut?.body);
       const enteredAt = firstOut?.dateAdded || null;
 
-      // Primera respuesta real (no STOP)
       let fi = -1;
       for (let i = 0; i < sms.length; i++) if (sms[i].direction === "inbound" && !isStop(sms[i].body)) { fi = i; break; }
+      let trgIdx = -1;
+      if (fi > 0) { for (let j = fi - 1; j >= 0; j--) if (sms[j].direction === "outbound") { trgIdx = j; break; } }
 
-      // Eventos: un registro por SMS outbound
       const events: any[] = [];
       let pos = 0;
       for (let i = 0; i < sms.length; i++) {
         const m = sms[i]; if (m.direction !== "outbound") continue;
         pos++;
-        // "consiguio respuesta" = el siguiente mensaje del hilo es inbound real
-        let reply = false;
-        for (let j = i + 1; j < sms.length; j++) {
-          if (sms[j].direction === "outbound") break;
-          if (!isStop(sms[j].body)) { reply = true; }
-          break;
+        // El mensaje siguiente: si es inbound STOP -> DND; si inbound normal -> reply.
+        let reply = false, dnd = false;
+        if (i + 1 < sms.length && sms[i + 1].direction === "inbound") {
+          if (isStop(sms[i + 1].body)) dnd = true; else reply = true;
         }
         const tm = tmplOf(m.body, t.name);
-        events.push({ tmpl: tm, key: hashKey(tm), pos, sent: m.dateAdded || null, reply, isTrigger: fi > 0 && i === (() => {
-          for (let j = fi - 1; j >= 0; j--) if (sms[j].direction === "outbound") return j; return -1;
-        })() });
+        events.push({ tmpl: tm, key: hashKey(tm), pos, sent: m.dateAdded || null, reply, dnd, isTrigger: i === trgIdx });
       }
       const trg = events.find((e) => e.isTrigger);
       return { t, wf, enteredAt, replied: fi >= 0, events,
@@ -204,7 +267,6 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
     await withDb(async (c) => {
       for (const r of results) {
         if (!r) continue;
-        // templates
         const uniq = new Map<string, string>();
         for (const e of r.events) uniq.set(e.key, e.tmpl);
         if (uniq.size) {
@@ -220,13 +282,13 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
           for (let i = 0; i < r.events.length; i += 200) {
             const chunk = r.events.slice(i, i + 200);
             const vals = chunk.map((_, j) => {
-              const b = j * 7;
-              return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5}::timestamptz,$${b + 6},$${b + 7})`;
+              const b = j * 8;
+              return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5}::timestamptz,$${b + 6},$${b + 7},$${b + 8})`;
             }).join(",");
             const args = chunk.flatMap((e: any) => [r.t.contact_id, r.wf, e.key, e.pos, e.sent, e.reply,
-              !!(e.isTrigger && r.t.won)]);
+              !!(e.isTrigger && r.t.won), e.dnd]);
             await c.queryArray(
-              `insert into sms_analytics.msg_events(contact_id,wf,tmpl_key,pos,sent_at,got_reply,led_to_lt)
+              `insert into sms_analytics.msg_events(contact_id,wf,tmpl_key,pos,sent_at,got_reply,led_to_lt,led_to_dnd)
                values ${vals}`, args);
           }
         }
@@ -262,26 +324,37 @@ async function build() {
       const byWf: Record<string, { ing: number; lt: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
 
-      const msgs = await c.queryObject<{ wf: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint }>(
+      const msgs = await c.queryObject<{ wf: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
         `select e.wf, t.tmpl, min(e.pos)::int as pos,
                 count(*)::bigint as sends,
                 count(*) filter (where e.got_reply)::bigint as replies,
-                count(*) filter (where e.led_to_lt)::bigint as lts
+                count(*) filter (where e.led_to_lt)::bigint as lts,
+                count(*) filter (where e.led_to_dnd)::bigint as dnds
          from sms_analytics.msg_events e
          join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
          where e.sent_at >= now() - ($1 || ' days')::interval
-         group by e.wf, t.tmpl
-         having count(*) >= 5
-         order by count(*) desc`, [String(win)]);
+         group by e.wf, t.tmpl`, [String(win)]);
 
-      const msgsByWf: Record<string, any[]> = {};
+      // Agrupo por mensaje OFICIAL (skel): todas las variantes (firmas, glitches
+      // de normalizacion) suman en una sola fila, mostrando el copy oficial limpio.
+      const agg: Record<string, Record<string, any>> = {};
       for (const r of msgs.rows) {
-        const sends = Number(r.sends), replies = Number(r.replies), lts = Number(r.lts);
-        (msgsByWf[r.wf] || (msgsByWf[r.wf] = [])).push({
-          tmpl: r.tmpl, pos: r.pos, sends, replies, lts,
-          replyRate: sends ? Math.round(1000 * replies / sends) / 10 : 0,
-          ltRate: sends ? Math.round(10000 * lts / sends) / 100 : 0,
-        });
+        const sk = skel(r.tmpl);
+        const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
+        if (!text) continue; // no pertenece a la secuencia -> se descarta (change #1)
+        const g = (agg[r.wf] || (agg[r.wf] = {}));
+        const e = g[sk] || (g[sk] = { tmpl: text, pos: r.pos, sends: 0, replies: 0, lts: 0, dnds: 0 });
+        e.sends += Number(r.sends); e.replies += Number(r.replies); e.lts += Number(r.lts); e.dnds += Number(r.dnds);
+        if (r.pos < e.pos) e.pos = r.pos;
+      }
+      const msgsByWf: Record<string, any[]> = {};
+      for (const wf of Object.keys(agg)) {
+        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) => e.sends >= 5).map((e: any) => ({
+          tmpl: e.tmpl, pos: e.pos, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
+          replyRate: e.sends ? Math.round(1000 * e.replies / e.sends) / 10 : 0,
+          ltRate: e.sends ? Math.round(10000 * e.lts / e.sends) / 100 : 0,
+          dndRate: e.sends ? Math.round(1000 * e.dnds / e.sends) / 10 : 0,
+        })).sort((a: any, b: any) => b.sends - a.sends);
       }
       out.windows[win] = {
         sequences: WF.map((w) => {
