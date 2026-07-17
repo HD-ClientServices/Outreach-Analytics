@@ -1,0 +1,8 @@
+# Supabase CLI config. project_id = ref del proyecto.
+project_id = "ouszjnrkawvrwxjjgrxx"
+
+[functions.outreach-analytics]
+verify_jwt = false
+
+[functions.sms-secuencias]
+verify_jwt = false

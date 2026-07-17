@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Outreach Analytics · Intro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Tokens tomados del sitio de Intro (tryintro.com) */
+:root{
+  --background:#ffffff; --surface:#fdfcfc; --card:#f5f3f1; --card-2:#efece8;
+  --foreground:#171717; --muted:rgba(0,0,0,.6); --muted-2:rgba(0,0,0,.45);
+  --border:#e5e7eb; --border-side:rgba(0,0,0,.05);
+  --accent:#000000; --accent-fg:#ffffff; --highlight:#fef8d4;
+  --green:#16a34a;
+  --font-sans:'Inter',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --radius:12px; --radius-lg:24px; --radius-xl:32px; --container:1152px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--foreground);font-family:var(--font-sans);min-height:100vh;-webkit-font-smoothing:antialiased}
+.wrap{max-width:var(--container);margin:0 auto;padding:44px 24px 80px}
+
+h1{font-size:43px;font-weight:300;margin:0;letter-spacing:-.03em;line-height:1.08}
+h1 em{font-style:italic;background:var(--highlight);padding:0 .12em;border-radius:3px}
+.sub{font-size:15px;color:var(--muted);margin-top:10px;font-weight:400}
+
+.note{background:var(--highlight);border:1px solid rgba(0,0,0,.06);padding:14px 18px;border-radius:var(--radius);font-size:13px;line-height:1.55;margin:24px 0 0;color:var(--foreground)}
+.note code{font-family:var(--font-mono);font-size:12px}
+
+.sec{margin-top:40px}
+.sec h2{font-size:19px;font-weight:500;letter-spacing:-.02em;margin:0 0 3px}
+.sec .h{font-size:13px;color:var(--muted-2);margin-bottom:16px}
+
+.card{background:var(--background);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-2);font-weight:500;padding:14px 20px;border-bottom:1px solid var(--border)}
+td{padding:15px 20px;border-bottom:1px solid var(--border-side);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--surface)}
+.num{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:13.5px}
+
+.seqname{font-weight:500;font-size:14.5px;letter-spacing:-.01em}
+.seqname small{display:block;color:var(--muted-2);font-size:11.5px;font-weight:400;margin-top:3px;letter-spacing:0}
+
+/* Barra: marca fina, un solo hue de marca. El % va en tinta, no en el color del dato. */
+.crcell{display:flex;align-items:center;gap:12px}
+.crval{font-family:var(--font-mono);font-weight:700;font-size:14px;min-width:52px;text-align:right;font-variant-numeric:tabular-nums}
+.track{flex:1;height:8px;border-radius:4px;background:var(--card-2);overflow:hidden;min-width:70px}
+.fill{height:100%;border-radius:4px;background:var(--green);transition:width .45s ease}
+
+.pos{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 7px;border-radius:7px;background:var(--card);font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--foreground)}
+.frase{line-height:1.5;font-size:13.5px;max-width:640px}
+
+.controls{display:flex;gap:22px;align-items:center;flex-wrap:wrap}
+.grp{display:flex;gap:7px;align-items:center}
+.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-2);font-weight:500;margin-right:3px}
+.pill{padding:7px 15px;border-radius:999px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--background);color:var(--muted);user-select:none;transition:all .15s;font-family:var(--font-sans)}
+.pill:hover{border-color:rgba(0,0,0,.25);color:var(--foreground)}
+.pill.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+
+.nd{color:var(--muted-2);font-family:var(--font-mono)}
+.foot{margin-top:44px;font-size:12px;color:var(--muted-2);text-align:center;line-height:1.7}
+</style></head>
+<body><div class="wrap">
+
+<h1>Outreach <em>analytics</em>.</h1>
+<div class="sub">Rendimiento por secuencia · Live transfers ÷ contactos ingresados · 3 secuencias SMS</div>
+
+<div class="controls" style="margin-top:22px">
+  <div class="grp"><span class="lbl">Ventana</span><div class="grp" id="wins"></div></div>
+</div>
+
+<div class="note">
+<b>Estructura, no datos.</b> Solo los <b>LT</b> (2 / 50 / 62) y las frases son reales.
+<b>Contactos ingresados y todos los CR son inventados</b> para que veas el layout — no los leas como resultados.
+El CR (<code>LT ÷ contactos ingresados</code>) no se puede calcular todavía: hace falta saber cuántos contactos
+entraron a cada secuencia, o sea extraer los ~9.600 de la cohorte. Hoy solo bajamos los 218 ganados.
+</div>
+
+<div class="sec">
+  <h2>Rendimiento general × secuencia</h2>
+  <div class="h">LT ÷ contactos ingresados · ordenado por CR</div>
+  <div class="card">
+    <table>
+      <thead><tr>
+        <th style="width:290px">Secuencia</th>
+        <th class="num" style="width:80px">LT</th>
+        <th class="num" style="width:170px">Contactos ingresados</th>
+        <th>CR de secuencia</th>
+      </tr></thead>
+      <tbody id="t1"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>Mensajes</h2>
+  <div class="h">Elegí una secuencia. Cada frase con su posición en la cadencia y su CR.</div>
+
+  <div class="controls" style="margin-bottom:16px">
+    <div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div>
+    <div class="grp"><span class="lbl">Secuencia</span><div class="grp" id="tabs"></div></div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr>
+        <th class="num" style="width:70px">SMS #</th>
+        <th>Frase</th>
+        <th style="width:210px">CR</th>
+      </tr></thead>
+      <tbody id="t2"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="foot">Estructura de referencia · los nombres A/B/C se reemplazan por los reales</div>
+</div>
+
+<script>
+// LT = real (del dryrun). ing/cr = MUESTRA, consistentes entre si: cr = lt/ing.
+var SEQ = [
+  {key:"A", label:"Secuencia A", real:"Partner CC · DebtMD v2",        lt:2,  ing:13},
+  {key:"B", label:"Secuencia B", real:"V2 · BULK FUP COLD BLAST",      lt:50, ing:625},
+  {key:"C", label:"Secuencia C", real:"PARTNER · Defaults & Declined", lt:62, ing:3100}
+];
+
+// Frases reales de cada secuencia (el SMS 1 es el que nos pasaste). CR = muestra.
+var MSGS = {
+  A:[{pos:1, t:"Hi {nombre}, this is Anna. We received your submission regarding your {monto} in CC. When's a good time for a quick call?", cr:13.0},
+     {pos:2, t:"Hi {nombre}, did you see my last message? We received your submission and would love to review your options", cr:4.2}],
+  B:[{pos:1, t:"Hi {nombre}, we may be able to improve your weekly payments. Open to a quick call about your MCAs?", cr:9.1},
+     {pos:2, t:"We have a better option than an MCA... Can I call you now?", cr:6.4},
+     {pos:3, t:"Btw we just got a great result for a client like you. Quick call to share it?", cr:3.3},
+     {pos:7, t:"Taking another MCA may not be the answer. Can I call you?", cr:11.5},
+     {pos:10, t:"Any thoughts, {nombre}?", cr:1.2}],
+  C:[{pos:1, t:"Hi {nombre}, just got your MCA file. We're aware of your default situation and we'd like to help you. Can I call you now?", cr:7.8},
+     {pos:1, t:"Hi {nombre}, just got your file. We were informed you didn't qualify for an MCA. We can help you with that.", cr:11.4},
+     {pos:6, t:"Hi {nombre}, I've seen how heavy MCA payments can become without guidance. I want to help early. Just reply.", cr:3.1},
+     {pos:12, t:"{nombre} - I just want to make sure that you received my message. LMK.", cr:9.6}]
+};
+
+var ST = {tab:"A", sort:"pos", win:30};
+
+// Las 3 ventanas salen de UNA sola extraccion de 30d filtrada por fecha.
+// Aca es muestra: escalo los 30d para que se vea que el control hace algo.
+// El CR NUNCA se escala: siempre se recalcula como lt/ing, asi la formula
+// de la pizarra se sostiene en cualquier ventana.
+var WINF = {7:{lt:0.20, ing:0.24}, 14:{lt:0.44, ing:0.47}, 30:{lt:1, ing:1}};
+function wlt(v){ return v==null?null:Math.round(v*WINF[ST.win].lt) }
+function wing(v){ return v==null?null:Math.round(v*WINF[ST.win].ing) }
+function crOf(lt,ing){ return (lt==null||!ing) ? null : Math.round(1000*lt/ing)/10 }
+
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function nf(v){return v==null ? '<span class="nd">—</span>' : v.toLocaleString("es-CL")}
+function bar(cr,mx){
+  if(cr==null) return '<div class="crcell"><span class="crval nd">—</span><div class="track"></div></div>';
+  return '<div class="crcell"><span class="crval">'+cr+'%</span>'
+       + '<div class="track"><div class="fill" style="width:'+Math.max(cr/mx*100,3)+'%"></div></div></div>';
+}
+
+function t1(){
+  var rows = SEQ.map(function(s){
+    var lt = wlt(s.lt), ing = wing(s.ing);
+    return {label:s.label, real:s.real, lt:lt, ing:ing, cr:crOf(lt,ing)};
+  }).sort(function(a,b){return (b.cr==null?-1:b.cr)-(a.cr==null?-1:a.cr)});
+  var mx = Math.max.apply(null, rows.map(function(r){return r.cr||0}).concat([1]));
+  document.getElementById("t1").innerHTML = rows.map(function(s){
+    return '<tr><td><div class="seqname">'+esc(s.label)+'<small>'+esc(s.real)+'</small></div></td>'
+      + '<td class="num">'+nf(s.lt)+'</td>'
+      + '<td class="num">'+nf(s.ing)+'</td>'
+      + '<td>'+bar(s.cr,mx)+'</td></tr>';
+  }).join("");
+}
+function wins(){
+  document.getElementById("wins").innerHTML = [7,14,30].map(function(w){
+    return '<span class="pill'+(ST.win==w?' on':'')+'" onclick="ST.win='+w+';wins();t1();t2()">'+w+' días</span>';
+  }).join("");
+}
+function tabs(){
+  document.getElementById("tabs").innerHTML = SEQ.map(function(s){
+    return '<span class="pill'+(ST.tab==s.key?' on':'')+'" onclick="ST.tab=\''+s.key+'\';tabs();t2()">'+s.key+'</span>';
+  }).join("");
+  document.getElementById("sorts").innerHTML =
+    '<span class="pill'+(ST.sort=="pos"?' on':'')+'" onclick="ST.sort=\'pos\';sorts();t2()">Posición</span>'+
+    '<span class="pill'+(ST.sort=="cr"?' on':'')+'" onclick="ST.sort=\'cr\';sorts();t2()">Conversión</span>';
+}
+function sorts(){tabs()}
+function t2(){
+  var rows = (MSGS[ST.tab]||[]).slice();
+  if(ST.sort=="pos") rows.sort(function(a,b){return a.pos-b.pos});
+  else rows.sort(function(a,b){return (b.cr==null?-1:b.cr)-(a.cr==null?-1:a.cr)});
+  var mx = Math.max.apply(null, rows.map(function(r){return r.cr||0}).concat([1]));
+  // El # es SIEMPRE la posicion en la cadencia, no el ranking: si no, al ordenar
+  // por conversion se pierde de vista de que SMS estamos hablando.
+  document.getElementById("t2").innerHTML = rows.map(function(m){
+    return '<tr><td class="num"><span class="pos">'+m.pos+'</span></td>'
+      + '<td><div class="frase">'+esc(m.t)+'</div></td>'
+      + '<td>'+bar(m.cr,mx)+'</td></tr>';
+  }).join("") || '<tr><td colspan="3" class="nd" style="padding:20px">Sin frases cargadas.</td></tr>';
+}
+wins();t1();tabs();t2();
+</script></body></html>
