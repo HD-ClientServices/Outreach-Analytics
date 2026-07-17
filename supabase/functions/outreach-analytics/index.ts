@@ -8,13 +8,21 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ---- Las 3 secuencias -------------------------------------------------------
 // GHL no manda workflowId en los mensajes. Se atribuye el CONTACTO por su
 // PRIMER SMS outbound comparado contra el SMS 1 de cada workflow.
+// Patrones calibrados 17/07/2026 contra los copies OFICIALES de GHL (SMS 1 de
+// cada secuencia). Frases distintivas, sin variables ({{...}}), asi el match es
+// igual sobre el body crudo o sobre el template normalizado.
+//   cc     -> "...regarding your {monto} in CC" / "this is Anna"       (siempre menciona "in CC")
+//   cold   -> "improve your weekly payments" / "Open to a quick call about your MCAs"
+//   defdec -> "just got your (MCA) file" + "default situation" | "qualify for an MCA"
+// NO son de estas 3 (workflows aparte, quedan 'none'): "from my personal number",
+// "About improving those CC terms", "we do MCA relief", "MCA pays itself first weekly", etc.
 const WF: { key: string; label: string; re: RegExp }[] = [
   { key: "cc", label: "Partner CC · DebtMD v2",
-    re: /this is anna|regarding your .{0,40}\bin cc\b|received your submission regarding/i },
+    re: /\bin cc\b|this is anna/i },
   { key: "cold", label: "V2 · BULK FUP COLD BLAST",
-    re: /improve your weekly payments|open to a quick call about your mcas?/i },
+    re: /improve your weekly payments|open to a quick call about your mca/i },
   { key: "defdec", label: "PARTNER · Defaults & Declined",
-    re: /just got your (mca )?file|did\s?n[o']?t qualify for an mca|aware of your default situation/i },
+    re: /default situation|qualify for an mca|just got your (mca )?file/i },
 ];
 function whichWorkflow(body?: string): string {
   const b = body || "";
