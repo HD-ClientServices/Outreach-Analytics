@@ -65,7 +65,6 @@ const OFFICIAL: Record<string, string[]> = {
     "Btw we just got a great result for a client like you. Quick call to share it?",
     "We help owners simplify what they pay each week. Can I call you?",
     "Hi {nombre}, {opener} at Settlegroup. We would really like to help you get ahead of this. Can I call you now?",
-    "{nombre}?",
     "Taking another MCA may not be the answer. Can I call you? - {opener}",
     "GM {nombre}!, {opener} at Settlegroup. Another MCA may not fix this, but we may. Can I call you?",
     "Any thoughts, {nombre}?",
@@ -87,8 +86,16 @@ const OFFICIAL_KEYS: Record<string, Set<string>> = {};
 // mostrar el copy oficial limpio, sin firmas ni glitches de normalizacion).
 const OFF_TEXT: Record<string, Record<string, string>> = {};
 for (const k of Object.keys(OFFICIAL)) {
-  OFFICIAL_KEYS[k] = new Set(OFFICIAL[k].map(skel));
-  OFF_TEXT[k] = {}; for (const m of OFFICIAL[k]) OFF_TEXT[k][skel(m)] = m;
+  OFFICIAL_KEYS[k] = new Set();
+  OFF_TEXT[k] = {};
+  for (const m of OFFICIAL[k]) {
+    const sk = skel(m);
+    // Un esqueleto de <4 chars = mensaje de un solo placeholder ({nombre}?): es
+    // un cajon de sastre que absorbe cualquier mensaje de una palabra. Se ignora.
+    if (sk.length < 4) continue;
+    OFFICIAL_KEYS[k].add(sk);
+    OFF_TEXT[k][sk] = m;
+  }
 }
 function isOfficial(wf: string, tmpl: string): boolean {
   const set = OFFICIAL_KEYS[wf]; return !!set && set.has(skel(tmpl));
@@ -190,18 +197,22 @@ async function sampletags(cfg: Record<string, string>) {
 // Diagnostico: dimensiona la extraccion por conversaciones (total + shape + paginacion).
 async function convprobe(cfg: Record<string, string>) {
   const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  const d1 = await gget(BASE + "/conversations/search?locationId=" + loc + "&limit=1", key);
-  const d2 = await gget(BASE + "/conversations/search?locationId=" + loc + "&limit=3&sortBy=last_message_date&sort=desc", key);
-  const convs = d2?.conversations ?? [];
+  const base = BASE + "/conversations/search?locationId=" + loc + "&limit=1";
+  const c30 = Date.now() - 30 * 86400000;
+  const c32 = Date.now() - 32 * 86400000;
+  const dAll = await gget(base, key);
+  const w30 = await gget(base + "&startDate=" + c30, key);
+  const w32 = await gget(base + "&startDate=" + c32, key);
+  // Verifica que startDate filtra por dateAdded (todas las de la muestra creadas tras el corte).
+  const s = await gget(BASE + "/conversations/search?locationId=" + loc + "&limit=5&startDate=" + c30 + "&sortBy=last_message_date&sort=asc", key);
+  const sample = (s?.conversations ?? []).slice(0, 5).map((c: any) => ({
+    dateAdded: c?.dateAdded, lastMessageDate: c?.lastMessageDate, addedInWindow: (c?.dateAdded ?? 0) >= c30 }));
   return {
     generatedAt: new Date().toISOString(),
-    total: d1?.total ?? null,
-    topKeys: d1 ? Object.keys(d1) : null,
-    sample: convs.slice(0, 3).map((c: any) => ({
-      keys: Object.keys(c || {}), id: c?.id, contactId: c?.contactId,
-      lastMessageDate: c?.lastMessageDate, dateUpdated: c?.dateUpdated,
-      type: c?.type, lastMessageType: c?.lastMessageType, lastMessageBody: (c?.lastMessageBody || "").slice(0, 60),
-    })),
+    totalAll: dAll?.total ?? null,
+    total30dByStartDate: w30?.total ?? null,
+    total32dByStartDate: w32?.total ?? null,
+    sample,
   };
 }
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
