@@ -8,14 +8,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ---- Las 3 secuencias -------------------------------------------------------
 // GHL no manda workflowId en los mensajes. Se atribuye el CONTACTO por su
 // PRIMER SMS outbound comparado contra el SMS 1 de cada workflow.
-// Patrones calibrados 17/07/2026 contra los copies OFICIALES de GHL.
 const WF: { key: string; label: string; re: RegExp }[] = [
-  { key: "cc", label: "Partner CC · DebtMD v2",
-    re: /\bin cc\b|this is anna/i },
-  { key: "cold", label: "V2 · BULK FUP COLD BLAST",
-    re: /improve your weekly payments|open to a quick call about your mca/i },
-  { key: "defdec", label: "PARTNER · Defaults & Declined",
-    re: /default situation|qualify for an mca|just got your (mca )?file/i },
+  { key: "cc", label: "Partner CC · DebtMD v2", re: /\bin cc\b|this is anna/i },
+  { key: "cold", label: "V2 · BULK FUP COLD BLAST", re: /improve your weekly payments|open to a quick call about your mca/i },
+  { key: "defdec", label: "PARTNER · Defaults & Declined", re: /default situation|qualify for an mca|just got your (mca )?file/i },
 ];
 function whichWorkflow(body?: string): string {
   const b = body || "";
@@ -23,13 +19,11 @@ function whichWorkflow(body?: string): string {
   return "none";
 }
 
-// Firmantes/openers conocidos. Se normalizan a {opener} para agrupar el MISMO
-// mensaje con distinta firma (Maria/Camila/Sara/… = un solo mensaje).
+// Firmantes/openers conocidos -> {opener} para agrupar el mismo mensaje con firma distinta.
 const OPENERS = /\b(maria|camila|sara|santiago|james|anna|smith|lewis|miller|martinez)\b/ig;
 
-// Copies OFICIALES de cada secuencia (los que Vicente cargó de GHL). Solo se
-// miden mensajes que pertenecen a la secuencia del contacto — el resto (p.ej.
-// "{nombre}?" de otra secuencia "name?") NO se cuenta.
+// Copies OFICIALES de cada secuencia. Solo se miden mensajes que pertenecen a la
+// secuencia del contacto; el resto (p.ej. bare-name de otra secuencia) NO se cuenta.
 const OFFICIAL: Record<string, string[]> = {
   cc: [
     "Hi {nombre}, this is {opener}. We received your submission regarding your {monto} in CC. When's a good time for a quick call?",
@@ -76,29 +70,23 @@ const OFFICIAL: Record<string, string[]> = {
     "Hi {nombre}, {opener} at Settlegroup again. We just got a great result for a client like you. Can I share it on a quick call?",
   ],
 };
-// Clave por "esqueleto": toda variable ({nombre},{monto},{opener},{{...}}) -> 'v',
-// se tira el resto de puntuacion. Tolerante a firmas y a la glitch de {{día}}.
+// Esqueleto: toda variable ({nombre},{monto},{opener},{{...}}) -> 'v', se tira la puntuacion.
 function skel(t: string): string {
   return (t || "").toLowerCase().replace(/\{+[^{}]*\}+/g, "v").replace(/[^a-z0-9]/g, "");
 }
 const OFFICIAL_KEYS: Record<string, Set<string>> = {};
-// skel -> texto oficial canonico (para agrupar todas las variantes en 1 fila y
-// mostrar el copy oficial limpio, sin firmas ni glitches de normalizacion).
 const OFF_TEXT: Record<string, Record<string, string>> = {};
 for (const k of Object.keys(OFFICIAL)) {
   OFFICIAL_KEYS[k] = new Set();
   OFF_TEXT[k] = {};
   for (const m of OFFICIAL[k]) {
     const sk = skel(m);
-    // Un esqueleto de <4 chars = mensaje de un solo placeholder ({nombre}?): es
-    // un cajon de sastre que absorbe cualquier mensaje de una palabra. Se ignora.
+    // Esqueleto de <4 chars = mensaje de un solo placeholder ({nombre}?): cajon
+    // de sastre que absorbe cualquier mensaje de una palabra. Se ignora.
     if (sk.length < 4) continue;
     OFFICIAL_KEYS[k].add(sk);
     OFF_TEXT[k][sk] = m;
   }
-}
-function isOfficial(wf: string, tmpl: string): boolean {
-  const set = OFFICIAL_KEYS[wf]; return !!set && set.has(skel(tmpl));
 }
 
 function dbClient() { return new Client(Deno.env.get("SUPABASE_DB_URL")!); }
@@ -123,98 +111,6 @@ async function gget(url: string, key: string, tries = 5): Promise<any> {
   }
   return null;
 }
-async function gpost(url: string, key: string, body: any, tries = 5): Promise<any> {
-  for (let i = 0; i < tries; i++) {
-    try {
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { Authorization: "Bearer " + key, Version: VER, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (r.status === 200 || r.status === 201) return await r.json();
-      if ([429, 403, 502, 503].includes(r.status)) { await sleep(1200 + i * 1200); continue; }
-      return { _status: r.status, _body: (await r.text()).slice(0, 500) };
-    } catch (e) { await sleep(800 + i * 800); if (i === tries - 1) return { _error: String(e) }; }
-  }
-  return null;
-}
-// Tags que GHL aplica al inicio de cada workflow (minusculas, como los guarda GHL).
-const SEQ_TAGS: { key: string; label: string; tag: string }[] = [
-  { key: "cc", label: "Partner CC · DebtMD v2", tag: "secuencia partner cc" },
-  { key: "cold", label: "V2 · BULK FUP COLD BLAST", tag: "secuencia bfcb" },
-  { key: "defdec", label: "PARTNER · Defaults & Declined", tag: "secuencia partner mca" },
-];
-// Diagnostico: cuantos contactos tiene HOY cada tag de secuencia (denominador real).
-async function tagcount(cfg: Record<string, string>) {
-  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  const out: any[] = [];
-  for (const s of SEQ_TAGS) {
-    const d = await gpost(BASE + "/contacts/search", key, {
-      locationId: loc, page: 1, pageLimit: 1,
-      filters: [{ field: "tags", operator: "contains", value: s.tag }],
-    });
-    out.push({ key: s.key, label: s.label, tag: s.tag,
-      total: (typeof d?.total === "number") ? d.total : null,
-      err: d?._status ? { status: d._status, body: d._body } : (d?._error || undefined) });
-  }
-  // Lista todas las tags de la location, filtrada a las que suenan a secuencia,
-  // para descubrir el nombre real de la de Defaults & Declined.
-  const tl = await gget(BASE + "/locations/" + loc + "/tags", key);
-  const all = (tl?.tags ?? []).map((t: any) => t?.name).filter(Boolean);
-  const relevant = all.filter((n: string) =>
-    /secuencia|bfcb|cold|default|declin|mca|partner|debtmd|\bcc\b/i.test(n));
-  return { generatedAt: new Date().toISOString(), tags: out,
-    tagListCount: all.length, relevantTags: relevant };
-}
-// Diagnostico: para cada secuencia toma una muestra de contactos ya atribuidos
-// y lee sus tags REALES de GHL -> revela que tag usa cada workflow (incl. defdec).
-async function sampletags(cfg: Record<string, string>) {
-  const key = cfg.ghl_api_key;
-  const rows = await withDb(async (c) => {
-    const r = await c.queryObject<{ wf: string; contact_id: string }>(
-      `select wf, contact_id from (
-         select wf, contact_id,
-                row_number() over (partition by wf order by entered_at desc) as rn
-         from sms_analytics.cohort where done and wf in ('cc','cold','defdec')
-       ) s where rn <= 20`);
-    return r.rows;
-  });
-  const byWf: Record<string, string[]> = {};
-  for (const r of rows) (byWf[r.wf] || (byWf[r.wf] = [])).push(r.contact_id);
-  const perWf: Record<string, any> = {};
-  for (const wf of Object.keys(byWf)) {
-    const freq: Record<string, number> = {};
-    for (const cid of byWf[wf]) {
-      const d = await gget(BASE + "/contacts/" + cid, key);
-      const tags = d?.contact?.tags ?? d?.tags ?? [];
-      for (const t of tags) freq[t] = (freq[t] || 0) + 1;
-    }
-    perWf[wf] = { sampled: byWf[wf].length,
-      tags: Object.entries(freq).sort((a, b) => (b[1] as number) - (a[1] as number)).slice(0, 25) };
-  }
-  return { generatedAt: new Date().toISOString(), perWf };
-}
-// Diagnostico: dimensiona la extraccion por conversaciones (total + shape + paginacion).
-async function convprobe(cfg: Record<string, string>) {
-  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  const base = BASE + "/conversations/search?locationId=" + loc + "&limit=1";
-  const c30 = Date.now() - 30 * 86400000;
-  const c32 = Date.now() - 32 * 86400000;
-  const dAll = await gget(base, key);
-  const w30 = await gget(base + "&startDate=" + c30, key);
-  const w32 = await gget(base + "&startDate=" + c32, key);
-  // Verifica que startDate filtra por dateAdded (todas las de la muestra creadas tras el corte).
-  const s = await gget(BASE + "/conversations/search?locationId=" + loc + "&limit=5&startDate=" + c30 + "&sortBy=last_message_date&sort=asc", key);
-  const sample = (s?.conversations ?? []).slice(0, 5).map((c: any) => ({
-    dateAdded: c?.dateAdded, lastMessageDate: c?.lastMessageDate, addedInWindow: (c?.dateAdded ?? 0) >= c30 }));
-  return {
-    generatedAt: new Date().toISOString(),
-    totalAll: dAll?.total ?? null,
-    total30dByStartDate: w30?.total ?? null,
-    total32dByStartDate: w32?.total ?? null,
-    sample,
-  };
-}
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const res: R[] = new Array(items.length); let idx = 0;
   async function worker() { while (idx < items.length) { const i = idx++; res[i] = await fn(items[i]); } }
@@ -229,7 +125,6 @@ function tmplOf(body?: string, name?: string) {
   t = t.replace(/\b\d[\d,\.]*\s*(k|\/day|\/month|\/mo|\/wk|\/week)\b/ig, "{monto}");
   t = t.replace(/\b(mon|tue|wed|thu|fri|sat|sun)\w*\b/ig, "{día}");
   t = t.replace(/\b\d{1,2}:\d{2}\s*(am|pm)?|\b\d{1,2}\s*(am|pm)\b/ig, "{hora}");
-  // Firma del opener -> {opener} (agrupa mismo mensaje con distinto remitente).
   t = t.replace(OPENERS, "{opener}");
   t = t.replace(/\{opener\}(\s+\{opener\})+/g, "{opener}");
   t = t.replace(/\{nombre\}(\s+\{nombre\})+/g, "{nombre}");
@@ -244,54 +139,115 @@ function json(o: any, status = 200) {
   return new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
 }
 
-// ---- SEED: arma la cohorte desde oportunidades ------------------------------
+// ---- SEED: cohorte = TODOS los contactos texteados en la ventana ------------
+// Denominador por MENSAJES (no por oportunidad): enumera las conversaciones
+// creadas en la ventana (startDate/endDate filtran por dateAdded ~= inicio de
+// secuencia) en PARALELO por franjas de 1 dia, cada franja con su cursor
+// asc + startAfterDate. VERIFICADO: el param 'id' rompe la query, NO usarlo;
+// 'sort=desc' con startAfterDate devuelve lo ya visto. El 'won' (LT) se marca
+// aparte con ?action=markwon. work() atribuye wf por 1er SMS.
 async function seed(cfg: Record<string, string>) {
   const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  const pdata = await gget(BASE + "/opportunities/pipelines?locationId=" + loc, key);
-  const pls = pdata?.pipelines ?? []; if (!pls.length) throw new Error("pipelines unavailable (rate limit?)");
-  const opening = new Set<string>(), ganado = new Set<string>(); let partners = "";
-  for (const p of pls) {
-    if ((p.name || "").toUpperCase().includes("OPENING")) {
-      opening.add(p.id);
-      for (const s of (p.stages || [])) if ((s.name || "").includes("Ganado")) ganado.add(s.id);
+  const t0 = Date.now();
+  const day = 86400000;
+  const nDays = WINDOW_DAYS + 2; // margen sobre la ventana de 30d
+  const chunks: { s: number; e: number }[] = [];
+  for (let i = 0; i < nDays; i++) chunks.push({ s: t0 - (i + 1) * day, e: t0 - i * day });
+  const deadline = t0 + 118000;
+  let timedOut = false;
+
+  // Cada franja se enumera secuencial (cursor), pero las franjas van en paralelo.
+  const maps = await pool(chunks, 8, async (ch) => {
+    const local = new Map<string, string>();
+    let cursor = "", pages = 0;
+    while (pages < 400) {
+      if (Date.now() > deadline) { timedOut = true; break; }
+      let u = BASE + "/conversations/search?locationId=" + loc + "&limit=100&startDate=" + ch.s + "&endDate=" + ch.e + "&sortBy=last_message_date&sort=asc";
+      if (cursor) u += "&startAfterDate=" + cursor;
+      const d = await gget(u, key);
+      const convs = d?.conversations ?? [];
+      if (!convs.length) break;
+      for (const cv of convs) { const cid = cv.contactId; if (cid && !local.has(cid)) local.set(cid, cv.contactName || cv.fullName || ""); }
+      const lastLmd = convs[convs.length - 1]?.lastMessageDate ?? 0;
+      let nc = String(lastLmd); if (nc === cursor) nc = String(lastLmd + 1); // desempate
+      cursor = nc; pages++;
+      if (convs.length < 100) break;
     }
-    if ((p.name || "").toUpperCase().includes("PARTNER") && (p.name || "").toUpperCase().includes("WIN")) partners = p.id;
-  }
-  const cutoff = Date.now() - WINDOW_DAYS * 86400000;
-  let url: string | undefined = BASE + "/opportunities/search?location_id=" + loc + "&status=all&limit=100&order=added_desc";
-  const rows: any[] = []; const seen = new Set<string>(); let pg = 0;
-  while (url && pg < 300) {
-    const d = await gget(url, key); if (!d) break;
-    const ops = d.opportunities ?? []; if (!ops.length) break;
-    for (const o of ops) {
-      if (!(opening.has(o.pipelineId) || (partners && o.pipelineId === partners))) continue;
-      const created = Date.parse(o.createdAt || ""); if (!(created >= cutoff)) continue;
-      const cid = o.contactId; if (!cid || seen.has(cid)) continue; seen.add(cid);
-      const won = ganado.has(o.pipelineStageId) || o.status === "won";
-      rows.push({ cid, name: o.contact?.name || "", created: o.createdAt,
-        won, wonAt: won ? (o.lastStatusChangeAt || o.updatedAt || null) : null });
-    }
-    url = d.meta?.nextPageUrl; pg++;
-    if (ops.length && ops.every((o: any) => (Date.parse(o.createdAt || "") || Date.now()) < cutoff)) break;
-  }
+    return local;
+  });
+  const contacts = new Map<string, string>();
+  for (const m of maps) for (const [cid, name] of m) if (!contacts.has(cid)) contacts.set(cid, name);
+  if (timedOut) return { error: "enum timeout", collected: contacts.size };
+
+  // Solo si termino la enumeracion: truncar + insertar (won se marca despues).
+  const rows = [...contacts.entries()];
   await withDb(async (c) => {
     await c.queryObject("truncate sms_analytics.cohort, sms_analytics.msg_events");
     for (let i = 0; i < rows.length; i += 500) {
       const chunk = rows.slice(i, i + 500);
-      const vals = chunk.map((_, j) => {
-        const b = j * 5;
-        return `($${b + 1},$${b + 2},$${b + 3}::timestamptz,$${b + 4},$${b + 5}::timestamptz)`;
-      }).join(",");
-      const args = chunk.flatMap((r) => [r.cid, r.name, r.created, r.won, r.wonAt]);
+      const vals = chunk.map((_, j) => `($${j * 2 + 1},$${j * 2 + 2},false)`).join(",");
+      const args = chunk.flatMap((r) => [r[0], r[1]]);
       await c.queryArray(
-        `insert into sms_analytics.cohort(contact_id,name,opp_created_at,won,won_at) values ${vals}
-         on conflict (contact_id) do nothing`, args);
+        `insert into sms_analytics.cohort(contact_id,name,won) values ${vals} on conflict (contact_id) do nothing`, args);
     }
     await c.queryObject(
-      `update sms_analytics.run set started_at=now(), seeded=$1, finished_at=null, note='seeded' where id=1`,
-      [rows.length]);
+      `update sms_analytics.run set started_at=now(), seeded=$1, finished_at=null, note='seeded-conv' where id=1`, [rows.length]);
   });
-  return { seeded: rows.length, pages: pg };
+  return { seeded: rows.length, chunks: nDays, elapsedMs: Date.now() - t0 };
+}
+
+// ---- MARKWON: marca cohort.won desde oportunidades ganadas (numerador LT) ----
+// LT = oportunidad en la etapa "Lead Ganado (+60s)" de alguna pipeline *OPENING*
+// (transferencia en vivo). Se consulta por pipeline_id + pipeline_stage_id en
+// PARALELO (trae solo los LT -> pocos, rapido, completo). El code-check por stage
+// mantiene la correccion aunque GHL ignore el filtro. Partners Wins = status=won.
+// Desacoplado del seed; build() cruza (trigger AND won), asi el orden no afecta.
+async function markwon(cfg: Record<string, string>) {
+  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
+  const t0 = Date.now();
+  const pdata = await gget(BASE + "/opportunities/pipelines?locationId=" + loc, key);
+  const pls = pdata?.pipelines ?? []; if (!pls.length) throw new Error("pipelines unavailable");
+  const tasks: { pid: string; stage?: string; partner?: boolean }[] = [];
+  for (const p of pls) {
+    const nm = (p.name || "").toUpperCase();
+    if (nm.includes("OPENING")) {
+      for (const s of (p.stages || [])) if ((s.name || "").toLowerCase().includes("ganad")) tasks.push({ pid: p.id, stage: s.id });
+    } else if (nm.includes("PARTNER") && nm.includes("WIN")) {
+      tasks.push({ pid: p.id, partner: true });
+    }
+  }
+  const cutoff = t0 - (WINDOW_DAYS + 7) * 86400000;
+  const deadline = t0 + 115000;
+  const won = new Set<string>();
+  await pool(tasks, 8, async (tk) => {
+    let url: string | undefined = BASE + "/opportunities/search?location_id=" + loc + "&pipeline_id=" + tk.pid +
+      (tk.stage ? "&pipeline_stage_id=" + tk.stage : "") + "&status=all&limit=100&order=added_desc";
+    let pg = 0;
+    while (url && pg < 300 && Date.now() < deadline) {
+      const d = await gget(url, key); if (!d) break;
+      const ops = d.opportunities ?? []; if (!ops.length) break;
+      for (const o of ops) {
+        const w = tk.stage ? (o.pipelineStageId === tk.stage) : (o.status === "won");
+        if (w && o.contactId) won.add(o.contactId);
+      }
+      url = d.meta?.nextPageUrl; pg++;
+      if (ops.length && ops.every((o: any) => (Date.parse(o.createdAt || "") || t0) < cutoff)) break;
+    }
+  });
+  const marked = await withDb(async (c) => {
+    await c.queryObject("update sms_analytics.cohort set won=false where won");
+    let n = 0; const arr = [...won];
+    for (let i = 0; i < arr.length; i += 500) {
+      const chunk = arr.slice(i, i + 500);
+      const ph = chunk.map((_, j) => `$${j + 1}`).join(",");
+      const r = await c.queryObject<{ n: bigint }>(
+        `with u as (update sms_analytics.cohort set won=true where contact_id in (${ph}) returning 1)
+         select count(*)::bigint as n from u`, chunk);
+      n += Number(r.rows[0].n);
+    }
+    return n;
+  });
+  return { wonFound: won.size, marked, tasks: tasks.length, elapsedMs: Date.now() - t0 };
 }
 
 // ---- WORK: procesa una tanda, acotado por TIEMPO ----------------------------
@@ -301,8 +257,6 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
   let processed = 0;
 
   while (Date.now() - t0 < budgetMs) {
-    // Reclamo atomico: sin FOR UPDATE SKIP LOCKED dos crons solapados agarran
-    // los mismos contactos y duplican los msg_events.
     const batch = await withDb(async (c) => {
       const r = await c.queryObject<{ contact_id: string; name: string; won: boolean }>(
         `update sms_analytics.cohort set attempts = attempts + 1
@@ -322,7 +276,6 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
       const cd = await gget(BASE + "/conversations/search?locationId=" + loc + "&contactId=" + t.contact_id, key);
       const convs = cd?.conversations ?? [];
       const msgs: any[] = [];
-      // Varios hilos por contacto: hay que juntarlos u ordenarlos mal.
       for (const cv of convs.slice(0, 4)) {
         let last = "";
         for (let p = 0; p < 5; p++) {
@@ -350,7 +303,6 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
       for (let i = 0; i < sms.length; i++) {
         const m = sms[i]; if (m.direction !== "outbound") continue;
         pos++;
-        // El mensaje siguiente: si es inbound STOP -> DND; si inbound normal -> reply.
         let reply = false, dnd = false;
         if (i + 1 < sms.length && sms[i + 1].direction === "inbound") {
           if (isStop(sms[i + 1].body)) dnd = true; else reply = true;
@@ -375,9 +327,10 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
             `insert into sms_analytics.templates(tmpl_key,tmpl) values ${vals} on conflict (tmpl_key) do nothing`,
             arr.flat());
         }
-        // Reprocesar un contacto no debe duplicar sus eventos.
         await c.queryArray(`delete from sms_analytics.msg_events where contact_id=$1`, [r.t.contact_id]);
-        if (r.events.length) {
+        // Solo guardamos msg_events de las 3 secuencias; los 'none' (mayoria) no
+        // aportan al dashboard. led_to_lt = isTrigger (el 'won' se cruza en build).
+        if (r.events.length && r.wf !== "none") {
           for (let i = 0; i < r.events.length; i += 200) {
             const chunk = r.events.slice(i, i + 200);
             const vals = chunk.map((_, j) => {
@@ -385,7 +338,7 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
               return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5}::timestamptz,$${b + 6},$${b + 7},$${b + 8})`;
             }).join(",");
             const args = chunk.flatMap((e: any) => [r.t.contact_id, r.wf, e.key, e.pos, e.sent, e.reply,
-              !!(e.isTrigger && r.t.won), e.dnd]);
+              !!e.isTrigger, e.dnd]);
             await c.queryArray(
               `insert into sms_analytics.msg_events(contact_id,wf,tmpl_key,pos,sent_at,got_reply,led_to_lt,led_to_dnd)
                values ${vals}`, args);
@@ -427,7 +380,7 @@ async function build() {
         `select e.wf, t.tmpl, min(e.pos)::int as pos,
                 count(*)::bigint as sends,
                 count(*) filter (where e.got_reply)::bigint as replies,
-                count(*) filter (where e.led_to_lt)::bigint as lts,
+                count(*) filter (where e.led_to_lt and c.won)::bigint as lts,
                 count(*) filter (where e.led_to_dnd)::bigint as dnds
          from sms_analytics.msg_events e
          join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
@@ -435,13 +388,11 @@ async function build() {
          where c.entered_at >= now() - ($1 || ' days')::interval
          group by e.wf, t.tmpl`, [String(win)]);
 
-      // Agrupo por mensaje OFICIAL (skel): todas las variantes (firmas, glitches
-      // de normalizacion) suman en una sola fila, mostrando el copy oficial limpio.
       const agg: Record<string, Record<string, any>> = {};
       for (const r of msgs.rows) {
         const sk = skel(r.tmpl);
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
-        if (!text) continue; // no pertenece a la secuencia -> se descarta (change #1)
+        if (!text) continue;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const e = g[sk] || (g[sk] = { tmpl: text, pos: r.pos, sends: 0, replies: 0, lts: 0, dnds: 0 });
         e.sends += Number(r.sends); e.replies += Number(r.replies); e.lts += Number(r.lts); e.dnds += Number(r.dnds);
@@ -479,6 +430,7 @@ async function status() {
               (select count(*) from sms_analytics.cohort where done)::int as done,
               (select count(*) from sms_analytics.cohort where not done and attempts >= 3)::int as failed,
               (select count(*) from sms_analytics.msg_events)::int as events,
+              (select count(*) from sms_analytics.cohort where won)::int as won,
               (select seeded from sms_analytics.run where id=1) as seeded,
               (select started_at from sms_analytics.run where id=1) as started_at,
               (select finished_at from sms_analytics.run where id=1) as finished_at`);
@@ -498,13 +450,12 @@ Deno.serve(async (req) => {
 
   try {
     if (action === "seed") return json(await seed(cfg));
-    if (action === "tagcount") return json(await tagcount(cfg));
-    if (action === "sampletags") return json(await sampletags(cfg));
-    if (action === "convprobe") return json(await convprobe(cfg));
+    if (action === "markwon") return json(await markwon(cfg));
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
-      if (r.remaining === 0) { const b = await build(); return json({ ...r, built: true, generatedAt: b.generatedAt }); }
+      // Al drenar todo: marca won fresco y recien ahi construye (flujo semanal automatico).
+      if (r.remaining === 0) { await markwon(cfg); const b = await build(); return json({ ...r, built: true, generatedAt: b.generatedAt }); }
       return json(r);
     }
     if (action === "build") return json(await build());
