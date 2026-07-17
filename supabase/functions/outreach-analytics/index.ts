@@ -116,6 +116,94 @@ async function gget(url: string, key: string, tries = 5): Promise<any> {
   }
   return null;
 }
+async function gpost(url: string, key: string, body: any, tries = 5): Promise<any> {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + key, Version: VER, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (r.status === 200 || r.status === 201) return await r.json();
+      if ([429, 403, 502, 503].includes(r.status)) { await sleep(1200 + i * 1200); continue; }
+      return { _status: r.status, _body: (await r.text()).slice(0, 500) };
+    } catch (e) { await sleep(800 + i * 800); if (i === tries - 1) return { _error: String(e) }; }
+  }
+  return null;
+}
+// Tags que GHL aplica al inicio de cada workflow (minusculas, como los guarda GHL).
+const SEQ_TAGS: { key: string; label: string; tag: string }[] = [
+  { key: "cc", label: "Partner CC · DebtMD v2", tag: "secuencia partner cc" },
+  { key: "cold", label: "V2 · BULK FUP COLD BLAST", tag: "secuencia bfcb" },
+  { key: "defdec", label: "PARTNER · Defaults & Declined", tag: "secuencia partner mca" },
+];
+// Diagnostico: cuantos contactos tiene HOY cada tag de secuencia (denominador real).
+async function tagcount(cfg: Record<string, string>) {
+  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
+  const out: any[] = [];
+  for (const s of SEQ_TAGS) {
+    const d = await gpost(BASE + "/contacts/search", key, {
+      locationId: loc, page: 1, pageLimit: 1,
+      filters: [{ field: "tags", operator: "contains", value: s.tag }],
+    });
+    out.push({ key: s.key, label: s.label, tag: s.tag,
+      total: (typeof d?.total === "number") ? d.total : null,
+      err: d?._status ? { status: d._status, body: d._body } : (d?._error || undefined) });
+  }
+  // Lista todas las tags de la location, filtrada a las que suenan a secuencia,
+  // para descubrir el nombre real de la de Defaults & Declined.
+  const tl = await gget(BASE + "/locations/" + loc + "/tags", key);
+  const all = (tl?.tags ?? []).map((t: any) => t?.name).filter(Boolean);
+  const relevant = all.filter((n: string) =>
+    /secuencia|bfcb|cold|default|declin|mca|partner|debtmd|\bcc\b/i.test(n));
+  return { generatedAt: new Date().toISOString(), tags: out,
+    tagListCount: all.length, relevantTags: relevant };
+}
+// Diagnostico: para cada secuencia toma una muestra de contactos ya atribuidos
+// y lee sus tags REALES de GHL -> revela que tag usa cada workflow (incl. defdec).
+async function sampletags(cfg: Record<string, string>) {
+  const key = cfg.ghl_api_key;
+  const rows = await withDb(async (c) => {
+    const r = await c.queryObject<{ wf: string; contact_id: string }>(
+      `select wf, contact_id from (
+         select wf, contact_id,
+                row_number() over (partition by wf order by entered_at desc) as rn
+         from sms_analytics.cohort where done and wf in ('cc','cold','defdec')
+       ) s where rn <= 20`);
+    return r.rows;
+  });
+  const byWf: Record<string, string[]> = {};
+  for (const r of rows) (byWf[r.wf] || (byWf[r.wf] = [])).push(r.contact_id);
+  const perWf: Record<string, any> = {};
+  for (const wf of Object.keys(byWf)) {
+    const freq: Record<string, number> = {};
+    for (const cid of byWf[wf]) {
+      const d = await gget(BASE + "/contacts/" + cid, key);
+      const tags = d?.contact?.tags ?? d?.tags ?? [];
+      for (const t of tags) freq[t] = (freq[t] || 0) + 1;
+    }
+    perWf[wf] = { sampled: byWf[wf].length,
+      tags: Object.entries(freq).sort((a, b) => (b[1] as number) - (a[1] as number)).slice(0, 25) };
+  }
+  return { generatedAt: new Date().toISOString(), perWf };
+}
+// Diagnostico: dimensiona la extraccion por conversaciones (total + shape + paginacion).
+async function convprobe(cfg: Record<string, string>) {
+  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
+  const d1 = await gget(BASE + "/conversations/search?locationId=" + loc + "&limit=1", key);
+  const d2 = await gget(BASE + "/conversations/search?locationId=" + loc + "&limit=3&sortBy=last_message_date&sort=desc", key);
+  const convs = d2?.conversations ?? [];
+  return {
+    generatedAt: new Date().toISOString(),
+    total: d1?.total ?? null,
+    topKeys: d1 ? Object.keys(d1) : null,
+    sample: convs.slice(0, 3).map((c: any) => ({
+      keys: Object.keys(c || {}), id: c?.id, contactId: c?.contactId,
+      lastMessageDate: c?.lastMessageDate, dateUpdated: c?.dateUpdated,
+      type: c?.type, lastMessageType: c?.lastMessageType, lastMessageBody: (c?.lastMessageBody || "").slice(0, 60),
+    })),
+  };
+}
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const res: R[] = new Array(items.length); let idx = 0;
   async function worker() { while (idx < items.length) { const i = idx++; res[i] = await fn(items[i]); } }
@@ -332,7 +420,8 @@ async function build() {
                 count(*) filter (where e.led_to_dnd)::bigint as dnds
          from sms_analytics.msg_events e
          join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
-         where e.sent_at >= now() - ($1 || ' days')::interval
+         join sms_analytics.cohort c on c.contact_id = e.contact_id
+         where c.entered_at >= now() - ($1 || ' days')::interval
          group by e.wf, t.tmpl`, [String(win)]);
 
       // Agrupo por mensaje OFICIAL (skel): todas las variantes (firmas, glitches
@@ -398,6 +487,9 @@ Deno.serve(async (req) => {
 
   try {
     if (action === "seed") return json(await seed(cfg));
+    if (action === "tagcount") return json(await tagcount(cfg));
+    if (action === "sampletags") return json(await sampletags(cfg));
+    if (action === "convprobe") return json(await convprobe(cfg));
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);

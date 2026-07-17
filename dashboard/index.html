@@ -94,14 +94,14 @@ function render(){
   H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate</div>'
    + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
    + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
-  H+='<div class="sec"><h2>Messages</h2><div class="h" id="msgh"></div>'
-   + '<div class="controls" style="margin-bottom:14px">'
-   + '<div class="grp"><span class="lbl">Metric</span><div class="grp" id="metrics"></div></div>'
-   + '<div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div></div>'
+  H+='<div class="sec"><h2>Messages</h2><div class="h">Sends, responses, live transfers and opt-outs (DND) per message — with their rates. Only messages with 5+ sends.</div>'
+   + '<div class="controls" style="margin-bottom:14px"><div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div></div>'
    + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Sequence</span><div class="grp" id="tabs"></div></div></div>'
-   + '<div class="card"><table><thead><tr><th class="num" style="width:66px">SMS #</th><th>Message</th>'
-   + '<th class="num" style="width:80px">Sent</th><th class="num" style="width:120px" id="cnth">Responses</th>'
-   + '<th style="width:180px" id="crh">Response rate</th></tr></thead><tbody id="t2"></tbody></table></div></div>';
+   + '<div class="card"><div style="overflow-x:auto"><table><thead><tr>'
+   + '<th class="num" style="width:52px">SMS #</th><th style="min-width:260px">Message</th>'
+   + '<th class="num">Sent</th><th class="num">Responses</th><th class="num">Live transfers</th><th class="num">DND</th>'
+   + '<th class="num">Resp. rate</th><th class="num">LT rate</th><th class="num">DND rate</th>'
+   + '</tr></thead><tbody id="t2"></tbody></table></div></div></div>';
   document.getElementById("app").innerHTML=H;
   wins();t1();pills();t2();
   document.getElementById("stamp").textContent="Data from "+ago(DATA.snapshotAt||DATA.generatedAt)+" ago · "+ST.win+"-day window";
@@ -121,35 +121,32 @@ function t1(){
   }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">No data.</td></tr>';
 }
 function pills(){
-  document.getElementById("metrics").innerHTML=
-    '<span class="pill'+(ST.metric=="reply"?' on':'')+'" onclick="ST.metric=\'reply\';pills();t2()">Responses</span>'
-   +'<span class="pill'+(ST.metric=="lt"?' on':'')+'" onclick="ST.metric=\'lt\';pills();t2()">Live transfers</span>'
-   +'<span class="pill'+(ST.metric=="dnd"?' on':'')+'" onclick="ST.metric=\'dnd\';pills();t2()">DND</span>';
   document.getElementById("sorts").innerHTML=
     '<span class="pill'+(ST.sort=="pos"?' on':'')+'" onclick="ST.sort=\'pos\';pills();t2()">Position</span>'
-   +'<span class="pill'+(ST.sort=="cr"?' on':'')+'" onclick="ST.sort=\'cr\';pills();t2()">Conversion</span>';
+   +'<span class="pill'+(ST.sort=="reply"?' on':'')+'" onclick="ST.sort=\'reply\';pills();t2()">Response rate</span>'
+   +'<span class="pill'+(ST.sort=="lt"?' on':'')+'" onclick="ST.sort=\'lt\';pills();t2()">LT rate</span>'
+   +'<span class="pill'+(ST.sort=="dnd"?' on':'')+'" onclick="ST.sort=\'dnd\';pills();t2()">DND rate</span>';
   document.getElementById("tabs").innerHTML=ORDER.map(function(k){
     return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';pills();t2()">'+esc(seqName(k))+'</span>'}).join("");
 }
 function t2(){
   var w=W(), rows=((w.msgs||{})[ST.tab]||[]).slice();
   if(ST.sort=="pos") rows.sort(function(a,b){return a.pos-b.pos});
-  else rows.sort(function(a,b){return metricOf(b)-metricOf(a)});
-  var mx=Math.max.apply(null,rows.map(metricOf).concat([0.0001]));
-  document.getElementById("cnth").textContent = metricName();
-  document.getElementById("crh").textContent = ST.metric=="reply" ? "Response rate" : ST.metric=="lt" ? "Live transfer rate" : "DND rate";
-  document.getElementById("msgh").textContent = ST.metric=="reply"
-    ? "Which message hooks: of every 100 times it was sent, how many got a reply. Only messages with 5+ sends."
-    : ST.metric=="lt"
-    ? "Of every 100 times it was sent, how many ended in a live transfer. Only messages with 5+ sends."
-    : "Which message burns the list: of every 100 times it was sent, how many opted out (DND). Lower is better. Only messages with 5+ sends.";
+  else if(ST.sort=="reply") rows.sort(function(a,b){return b.replyRate-a.replyRate});
+  else if(ST.sort=="lt") rows.sort(function(a,b){return b.ltRate-a.ltRate});
+  else rows.sort(function(a,b){return b.dndRate-a.dndRate});
   document.getElementById("t2").innerHTML=rows.map(function(m){
     return '<tr><td class="num"><span class="pos">'+m.pos+'</span></td>'
       +'<td><div class="frase">'+esc(m.tmpl)+'</div></td>'
       +'<td class="num">'+nf(m.sends)+'</td>'
-      +'<td class="num">'+nf(countOf(m))+'</td>'
-      +'<td>'+bar(metricOf(m),mx,ST.metric=="dnd"?"var(--danger)":null)+'</td></tr>';
-  }).join("")||'<tr><td colspan="5" class="nd" style="padding:20px">No messages with 5+ sends in this window.</td></tr>';
+      +'<td class="num">'+nf(m.replies)+'</td>'
+      +'<td class="num">'+nf(m.lts)+'</td>'
+      +'<td class="num">'+nf(m.dnds)+'</td>'
+      +'<td class="num"><b>'+m.replyRate+'%</b></td>'
+      +'<td class="num"><b>'+m.ltRate+'%</b></td>'
+      +'<td class="num"><b style="color:var(--danger)">'+m.dndRate+'%</b></td>'
+      +'</tr>';
+  }).join("")||'<tr><td colspan="9" class="nd" style="padding:20px">No messages with 5+ sends in this window.</td></tr>';
 }
 fetch(EP+"?action=data&token="+encodeURIComponent(TOKEN))
   .then(function(r){return r.json()})
