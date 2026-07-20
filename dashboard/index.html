@@ -178,9 +178,9 @@ tbody tr:hover{background:var(--surface)}
 <h1>Outreach <em>analytics</em>.</h1>
 
 <nav class="tabs">
-  <button class="tab on" data-view="rendimiento" onclick="showTab('rendimiento')">Rendimiento</button>
+  <button class="tab on" data-view="rendimiento" onclick="showTab('rendimiento')">Performance</button>
   <button class="tab" data-view="persona" onclick="showTab('persona')">Buyer Persona</button>
-  <button class="tab" data-view="generador" onclick="showTab('generador')">Generador</button>
+  <button class="tab" data-view="generador" onclick="showTab('generador')">Generator</button>
 </nav>
 
 <!-- ======================= RENDIMIENTO ======================= -->
@@ -190,7 +190,7 @@ tbody tr:hover{background:var(--surface)}
       <div class="sub" style="margin-top:0">Performance by sequence · Live transfers ÷ contacts entered</div>
       <div class="stamp" id="stamp"></div>
     </div>
-    <button class="pill" id="refreshBtn" onclick="startRefresh()" title="Trae la actividad nueva desde el último refresh (además del automático de los domingos)">↻ Refresh</button>
+    <button class="pill" id="refreshBtn" onclick="startRefresh()" title="Pulls new activity since the last refresh (on top of the automatic Sunday run)">↻ Refresh</button>
   </div>
   <div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
   <div class="foot" id="foot"></div>
@@ -198,107 +198,107 @@ tbody tr:hover{background:var(--surface)}
 
 <!-- ======================= BUYER PERSONA ======================= -->
 <div id="view-persona" class="view pv" hidden>
-  <div class="sub" style="margin-top:22px">El perfil de los que cierran · de <b>66 deals ganados</b> (closed&nbsp;won) · <span style="opacity:.6">se actualiza cada 3 semanas, los domingos</span></div>
+  <div class="sub" style="margin-top:22px">The profile of those who close · from <b>66 won deals</b> (closed&nbsp;won) · <span style="opacity:.6">updates every 3 weeks, on Sundays</span></div>
   <div class="bp-grid">
 
     <div class="bp-field">
-      <div class="bp-label"><span class="n">01</span> Firmográfico</div>
+      <div class="bp-label"><span class="n">01</span> Firmographics</div>
       <div class="bp-box">
-        <div class="bp-line"><b>Perfil:</b> Dueño-operador de un negocio físico e intensivo en cash, de 5 a 30 años de trayectoria; sano pero ahogado por la deuda, no quebrado.</div>
-        <div class="bp-line"><b>Industrias:</b> 55% trades/contratistas, 15% transporte/auto, 13% food/retail, 14% salud/servicios. Casi cero e-commerce.</div>
-        <div class="bp-line"><b>Deuda:</b> Mediana de $111k (rango $20k a $520k); 9 de cada 10 están apilados en 2 a 6 MCAs.</div>
-        <div class="bp-line"><b>Mentalidad:</b> Piensa en dólares por semana o por día, nunca en APR; ingenuo con los MCA (“no sabía que la tasa era 56%”).</div>
-        <div class="bp-line"><b>Geografía:</b> Repartidos por todo EEUU, con peso en el Sur y el Sun&nbsp;Belt; 1 de cada 6 se atiende en español.</div>
+        <div class="bp-line"><b>Profile:</b> Owner-operator of a physical, cash-intensive business, 5 to 30 years old; healthy but drowning in debt, not bankrupt.</div>
+        <div class="bp-line"><b>Industries:</b> 55% trades/contractors, 15% transport/auto, 13% food/retail, 14% health/services. Almost zero e-commerce.</div>
+        <div class="bp-line"><b>Debt:</b> Median of $111k (range $20k to $520k); 9 of 10 are stacked in 2 to 6 MCAs.</div>
+        <div class="bp-line"><b>Mindset:</b> Thinks in dollars per week or per day, never in APR; naive about MCAs (“didn't know the rate was 56%”).</div>
+        <div class="bp-line"><b>Geography:</b> Spread across the US, weighted to the South and the Sun&nbsp;Belt; 1 in 6 is handled in Spanish.</div>
       </div>
-      <div class="bp-help">Industria, geografía y trayectoria de las empresas que cierran</div>
+      <div class="bp-help">Industry, geography and track record of the businesses that close</div>
     </div>
 
     <div class="bp-field">
-      <div class="bp-label"><span class="n">02</span> Pain points &amp; contexto</div>
+      <div class="bp-label"><span class="n">02</span> Pain points &amp; context</div>
       <div class="bp-box">
-        <div class="bp-line"><b>El dolor:</b> Un pago diario o semanal (de $3k a $20k por semana, hay quien paga $5,000 al día) que le estrangula el cash flow. En sus palabras: “la plata entra por adelante y sale por atrás”.</div>
-        <div class="bp-line"><b>Apilamiento:</b> 9 de cada 10 están apilados (“pido uno para pagar el otro”). Llegan al día pero ahogados; la firma los agarra antes del default.</div>
-        <div class="bp-line"><b>Origen:</b> Tomaron el MCA de forma defensiva (cubrir un bache, una temporada lenta, la nómina), casi nunca por lujo.</div>
-        <div class="bp-line"><b>Detonante:</b> Aceptan la llamada cuando el dolor se agudiza: un débito impagable, un UCC lien o una demanda, o ya los quemó un broker previo (1 de cada 3).</div>
+        <div class="bp-line"><b>The pain:</b> A daily or weekly payment ($3k to $20k per week, some pay $5,000 a day) that strangles their cash flow. In their words: “money in the front door, out the back door”.</div>
+        <div class="bp-line"><b>Stacking:</b> 9 of 10 are stacked (“I borrow one to pay the other”). Current but drowning; the firm catches them before default.</div>
+        <div class="bp-line"><b>Origin:</b> They took the MCA defensively (to bridge a gap, a slow season, payroll), rarely for luxury.</div>
+        <div class="bp-line"><b>Trigger:</b> They answer the call when the pain gets acute: an unpayable debit, a UCC lien or a lawsuit, or they were already burned by a prior broker (1 in 3).</div>
       </div>
-      <div class="bp-help">Qué les duele y por qué aceptan la llamada</div>
+      <div class="bp-help">What hurts them and why they answer the call</div>
     </div>
 
     <div class="bp-field">
-      <div class="bp-label"><span class="n">03</span> Drivers de compra</div>
+      <div class="bp-label"><span class="n">03</span> Buying drivers</div>
       <div class="bp-box">
-        <div class="bp-line"><b>Alivio ya:</b> El driver principal. Un pago que puedan bancar; cierran al escuchar el número nuevo (“eso sí lo pago sin sudar”).</div>
-        <div class="bp-line"><b>Protección legal:</b> Que frenen el hostigamiento, las demandas y los liens, con abogados de su lado.</div>
-        <div class="bp-line"><b>Destrabarse:</b> Salir de la trampa y desbloquear crédito real (una SBA, una línea).</div>
-        <div class="bp-line"><b>Justicia:</b> Pagar lo justo, no la tasa predatoria ni los fees inflados.</div>
-        <div class="bp-line"><b>La clave:</b> Quieren pagar (“no estoy huyendo”). El ángulo que cierra es reestructurar, no borrar: un pago 50 a 70% más bajo y abogados que los blindan.</div>
+        <div class="bp-line"><b>Relief now:</b> The main driver. A payment they can afford; they close on hearing the new number (“that one I can pay without sweating”).</div>
+        <div class="bp-line"><b>Legal protection:</b> Stop the harassment, the lawsuits and the liens, with attorneys on their side.</div>
+        <div class="bp-line"><b>Get unstuck:</b> Escape the trap and unblock real credit (an SBA, a line).</div>
+        <div class="bp-line"><b>Fairness:</b> Pay what's fair, not the predatory rate or the inflated fees.</div>
+        <div class="bp-line"><b>The key:</b> They want to pay (“I'm not running from it”). The angle that closes is restructure, not erase: a payment 50 to 70% lower and attorneys who shield them.</div>
       </div>
-      <div class="bp-help">Qué los motiva a hacer MCA debt settlement · emoción dominante: agobio + bronca por el engaño</div>
+      <div class="bp-help">What motivates them to do MCA debt settlement · dominant emotion: overwhelm + anger at being deceived</div>
     </div>
 
     <div class="bp-field">
-      <div class="bp-label"><span class="n">04</span> Objeciones típicas &amp; cómo abordarlas</div>
+      <div class="bp-label"><span class="n">04</span> Typical objections &amp; how to handle them</div>
       <div class="bp-box">
-        <div class="bp-line"><b>“¿Es diferente a la que ya me estafó?”</b> (la objeción más común) → Somos attorney-led desde el arranque; lo hacemos a diario con sus mismos lenders y les bajamos los fees, sin cobrar nada por adelantado.</div>
-        <div class="bp-line"><b>“¿Me van a seguir hostigando o demandar?”</b> → Con el poder de abogado toman toda la comunicación, el contrato nuevo pisa al original y manejan los UCC/COJ.</div>
-        <div class="bp-line"><b>“¿Tengo que poner plata adelante?”</b> → Sin adelanto (o solo $500 para abrir el escrow); el fee ya va incluido en el pago reducido.</div>
-        <div class="bp-line"><b>“¿Y mi crédito? No quiero otro MCA.”</b> → No es un préstamo ni una consolidación, es reestructuración; los MCA no reportan a crédito.</div>
-        <div class="bp-line"><b>“Lo pienso o lo hablo con mi socio.”</b> → Anclar al próximo débito: “frenamos el cobro de mañana”. Es el punto más flojo del cierre.</div>
+        <div class="bp-line"><b>“Is this different from the one that already scammed me?”</b> (the most common objection) → We're attorney-led from the start; we do this daily with their same lenders and cut the fees, charging nothing upfront.</div>
+        <div class="bp-line"><b>“Will they keep harassing me or sue me?”</b> → With power of attorney we take over all communication, the new agreement supersedes the original, and we handle the UCC/COJ.</div>
+        <div class="bp-line"><b>“Do I have to pay upfront?”</b> → No upfront (or just $500 to open escrow); the fee is already baked into the reduced payment.</div>
+        <div class="bp-line"><b>“What about my credit? I don't want another MCA.”</b> → It's not a loan or a consolidation, it's restructuring; MCAs don't report to credit.</div>
+        <div class="bp-line"><b>“Let me think about it or talk to my partner.”</b> → Anchor to the next debit: “we stop tomorrow's draft.” It's the weakest point of the close.</div>
       </div>
-      <div class="bp-help">Objection handling — la objeción típica y la frase que la desarma (oro para el copy del SMS)</div>
+      <div class="bp-help">Objection handling — the typical objection and the line that disarms it (gold for the SMS copy)</div>
     </div>
 
     <div class="bp-field bp-wide">
-      <div class="bp-label"><span class="n">05</span> Estilo de comunicación</div>
+      <div class="bp-label"><span class="n">05</span> Communication style</div>
       <div class="bp-box">
-        <div class="bp-line"><b>Habla de plata así:</b> En dólares por semana o por día, nunca en APR. Quiere “un solo pago mensual”.</div>
-        <div class="bp-line"><b>Nombra a sus lenders:</b> OnDeck, Forward, Rapid… Decir “conocemos a esos” genera confianza al toque.</div>
-        <div class="bp-line"><b>Métricas que mira:</b> El monto del pago semanal o diario y el porcentaje de reducción; no el plazo ni la tasa.</div>
-        <div class="bp-line"><b>Sus frases:</b> <q>It's killing me</q> · <q>strangling my working capital</q> · <q>borrowing from Peter to pay Paul</q> · <q>I'm not running from it</q> · <q>I'm the one that got it, I wanna pay it</q>.</div>
+        <div class="bp-line"><b>Talks money like this:</b> In dollars per week or per day, never in APR. Wants “one single monthly payment”.</div>
+        <div class="bp-line"><b>Names their lenders:</b> OnDeck, Forward, Rapid… Saying “we know those” builds instant trust.</div>
+        <div class="bp-line"><b>Metrics they watch:</b> The weekly or daily payment amount and the % reduction; not the term or the rate.</div>
+        <div class="bp-line"><b>Their phrases:</b> <q>It's killing me</q> · <q>strangling my working capital</q> · <q>borrowing from Peter to pay Paul</q> · <q>I'm not running from it</q> · <q>I'm the one that got it, I wanna pay it</q>.</div>
       </div>
-      <div class="bp-help">Sus palabras y las métricas que observa — para espejear en el copy del SMS</div>
+      <div class="bp-help">Their words and the metrics they watch — to mirror in the SMS copy</div>
     </div>
 
   </div>
 
   <div class="p-foot">
-    <div class="big">→ Fase 3</div>
-    <div class="t"><b>Esta persona sale de los 66 deals ganados reales</b> (transcripciones + análisis de IA de las llamadas). Es el input directo del <b>generador de secuencias</b>: cruzá este perfil con la data de rendimiento y la IA escribe SMS que hablan el idioma del que cierra — liderando con el apilamiento y el alivio del pago, no con copy genérico.</div>
+    <div class="big">→ Phase 3</div>
+    <div class="t"><b>This persona comes from the 66 real won deals</b> (call transcripts + AI analysis). It's the direct input for the <b>sequence generator</b>: cross this profile with the performance data and the AI writes SMS that speak the closer's language — leading with the stacking and the payment relief, not generic copy.</div>
   </div>
 </div>
 
 <!-- ======================= GENERADOR (FASE 3) ======================= -->
 <div id="view-generador" class="view gv" hidden>
-  <div class="sub" style="margin-top:22px">Fase 3 · genera secuencias nuevas cruzando <b>rendimiento</b> + <b>buyer persona</b> + <b>voz de marca</b> con IA. Propone variantes A/B para testear — <b>no envía nada</b>, vos revisás y aprobás.</div>
+  <div class="sub" style="margin-top:22px">Phase 3 · generates new sequences by crossing <b>performance</b> + <b>buyer persona</b> + <b>brand voice</b> with AI. It proposes A/B variants to test — <b>it sends nothing</b>, you review and approve.</div>
 
   <div class="gform">
     <div class="gfield gf-wide">
-      <label>Objetivo de la secuencia</label>
-      <textarea id="g_goal" rows="2" placeholder="Ej: cold outreach a contractors apilados que están al día pero ahogados">cold outreach to stacked owners who are current but drowning</textarea>
+      <label>Sequence goal</label>
+      <textarea id="g_goal" rows="2" placeholder="e.g. cold outreach to stacked contractors who are current but drowning">cold outreach to stacked owners who are current but drowning</textarea>
     </div>
     <div class="gfield gf-wide">
-      <label>Audiencia / segmento <span class="opt">(opcional)</span></label>
-      <input id="g_aud" type="text" placeholder="Ej: trades/construcción con un UCC lien que les bloquea una SBA" />
+      <label>Audience / segment <span class="opt">(optional)</span></label>
+      <input id="g_aud" type="text" placeholder="e.g. trades/construction with a UCC lien blocking an SBA" />
     </div>
     <div class="gfield">
-      <label>Mensajes por secuencia</label>
+      <label>Messages per sequence</label>
       <input id="g_msgs" type="number" min="3" max="12" value="6" />
     </div>
     <div class="gfield">
-      <label>Variantes A/B</label>
+      <label>A/B variants</label>
       <input id="g_vars" type="number" min="1" max="3" value="2" />
     </div>
     <div class="gfield">
-      <label>Idioma</label>
-      <select id="g_lang"><option value="English">English</option><option value="Spanish">Español</option></select>
+      <label>Language</label>
+      <select id="g_lang"><option value="English">English</option><option value="Spanish">Spanish</option></select>
     </div>
     <div class="gfield">
-      <label>Ventana de datos</label>
-      <select id="g_win"><option value="30">30 días</option><option value="14">14 días</option><option value="7">7 días</option></select>
+      <label>Data window</label>
+      <select id="g_win"><option value="30">30 days</option><option value="14">14 days</option><option value="7">7 days</option></select>
     </div>
     <div class="gfield gf-wide gf-actions">
-      <button class="gbtn" id="genBtn" onclick="genRun()">Generar secuencias</button>
-      <span class="ghint">Cruza los datos en vivo con Claude · ~10–25s</span>
+      <button class="gbtn" id="genBtn" onclick="genRun()">Generate sequences</button>
+      <span class="ghint">Crosses the live data with Claude · ~10–25s</span>
     </div>
   </div>
 
@@ -331,44 +331,44 @@ function genRun(){
     lang:document.getElementById("g_lang").value,
     win:document.getElementById("g_win").value
   };
-  btn.disabled=true; btn.textContent="Generando…";
-  out.innerHTML='<div class="sub" style="margin-top:24px"><span class="spin"></span>La IA está escribiendo las secuencias…</div>';
+  btn.disabled=true; btn.textContent="Generating…";
+  out.innerHTML='<div class="sub" style="margin-top:24px"><span class="spin"></span>The AI is writing the sequences…</div>';
   fetch(EP+"?action=generate&token="+encodeURIComponent(TOKEN),{
     method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({brief:brief})
   }).then(function(r){return r.json()}).then(function(d){
-    btn.disabled=false; btn.textContent="Generar secuencias";
+    btn.disabled=false; btn.textContent="Generate sequences";
     if(d.error){ out.innerHTML='<div class="gen-err"><b>Error:</b> '+esc(d.error)+'</div>'; return; }
     genRender(d);
   }).catch(function(e){
-    btn.disabled=false; btn.textContent="Generar secuencias";
-    out.innerHTML='<div class="gen-err"><b>Error de red:</b> '+esc(String(e))+'</div>';
+    btn.disabled=false; btn.textContent="Generate sequences";
+    out.innerHTML='<div class="gen-err"><b>Network error:</b> '+esc(String(e))+'</div>';
   });
 }
 function genRender(d){
   var out=document.getElementById("genOut"), res=d.result;
   if(!res||!res.variants){
-    out.innerHTML='<div class="gen-err">La IA no devolvió JSON válido.<pre>'+esc(d.raw||"(vacío)")+'</pre></div>'; return;
+    out.innerHTML='<div class="gen-err">The AI didn\'t return valid JSON.<pre>'+esc(d.raw||"(empty)")+'</pre></div>'; return;
   }
-  var H='<div class="sub gen-note">'+res.variants.length+' variante(s) · modelo '+esc(d.model||"")+' · '+Math.round((d.elapsedMs||0)/1000)+'s'+(d.usage&&d.usage.output_tokens?(' · '+d.usage.output_tokens+' tokens'):'')+'</div>';
+  var H='<div class="sub gen-note">'+res.variants.length+' variant(s) · model '+esc(d.model||"")+' · '+Math.round((d.elapsedMs||0)/1000)+'s'+(d.usage&&d.usage.output_tokens?(' · '+d.usage.output_tokens+' tokens'):'')+'</div>';
   res.variants.forEach(function(v){
-    H+='<div class="gen-var"><div class="gen-vhead"><div class="nm">'+esc(v.name||"Variante")+'</div>'+(v.angle?'<div class="ang">'+esc(v.angle)+'</div>':'')+'</div>';
+    H+='<div class="gen-var"><div class="gen-vhead"><div class="nm">'+esc(v.name||"Variant")+'</div>'+(v.angle?'<div class="ang">'+esc(v.angle)+'</div>':'')+'</div>';
     (v.messages||[]).forEach(function(m){
       var chars=m.chars!=null?m.chars:String(m.text||"").length;
-      H+='<div class="gen-msg"><div class="idx">#'+(m.n!=null?m.n:"")+(m.day!=null?'<span class="day">día '+m.day+'</span>':'')+'</div>'
+      H+='<div class="gen-msg"><div class="idx">#'+(m.n!=null?m.n:"")+(m.day!=null?'<span class="day">day '+m.day+'</span>':'')+'</div>'
         +'<div><div class="gen-txt">'+esc(m.text||"")+'</div><div class="gen-meta">'
         +'<span class="gen-chars'+(chars>160?' over':'')+'">'+chars+' chars</span>'
         +(m.why?'<span class="gen-why">'+esc(m.why)+'</span>':'')
-        +'<span class="gen-copy" onclick="genCopy(this)">copiar</span>'
+        +'<span class="gen-copy" onclick="genCopy(this)">copy</span>'
         +'</div></div></div>';
     });
     H+='</div>';
   });
-  if(res.notes) H+='<div class="note" style="margin-top:20px"><b>Qué A/B testear:</b> '+esc(res.notes)+'</div>';
+  if(res.notes) H+='<div class="note" style="margin-top:20px"><b>What to A/B test:</b> '+esc(res.notes)+'</div>';
   out.innerHTML=H;
 }
 function genCopy(el){
   var t=el.parentElement.parentElement.querySelector(".gen-txt").textContent;
-  navigator.clipboard.writeText(t).then(function(){var o=el.textContent;el.textContent="copiado ✓";setTimeout(function(){el.textContent=o},1400)});
+  navigator.clipboard.writeText(t).then(function(){var o=el.textContent;el.textContent="copied ✓";setTimeout(function(){el.textContent=o},1400)});
 }
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
