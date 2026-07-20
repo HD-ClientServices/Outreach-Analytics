@@ -63,7 +63,7 @@ tbody tr:hover{background:var(--surface)}
 .view[hidden]{display:none}
 
 /* ---- buyer persona view ---- */
-.pv{max-width:900px}
+.pv{max-width:1040px}
 .p-lead{font-size:16px;color:var(--muted);margin-top:12px;line-height:1.55;max-width:64ch}
 .p-lead b{color:var(--foreground);font-weight:600}
 .p-stats{margin-top:28px;display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
@@ -120,6 +120,25 @@ tbody tr:hover{background:var(--surface)}
   .p-stats{grid-template-columns:repeat(2,1fr)} .p-var{grid-template-columns:1fr}
   .p-bar{grid-template-columns:130px 1fr auto} h1{font-size:34px}
 }
+/* ---- persona: campos estilo formulario (prototipo "Edit Additional Information") ---- */
+.bp-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px 34px;margin-top:32px;align-items:start}
+.bp-field{display:flex;flex-direction:column}
+.bp-label{font-size:15px;font-weight:600;color:var(--foreground);letter-spacing:-.01em;margin-bottom:10px;display:flex;align-items:baseline;gap:8px}
+.bp-label .n{font-family:var(--font-mono);font-size:11px;font-weight:500;color:var(--green)}
+.bp-box{border:1px solid var(--border);border-radius:10px;background:var(--background);padding:16px 19px}
+.bp-line{font-size:14px;line-height:1.55;color:var(--foreground);margin:0 0 13px}
+.bp-line:last-child{margin-bottom:0}
+.bp-line b{font-weight:600}
+.bp-line i{color:var(--muted);font-style:italic}
+.bp-line .amt{font-family:var(--font-mono);font-weight:600;white-space:nowrap}
+.bp-line .neg{color:var(--danger);font-weight:600}
+.bp-line .ob{font-weight:600}
+.bp-line .fix{color:var(--muted)}
+.bp-line q{quotes:none;font-style:italic;color:var(--muted)}
+.bp-line q::before{content:'“'}.bp-line q::after{content:'”'}
+.bp-help{font-size:12.5px;color:var(--muted-2);margin-top:9px;line-height:1.45}
+.bp-wide{grid-column:1 / -1}
+@media (max-width:760px){.bp-grid{grid-template-columns:1fr;gap:22px}.bp-wide{grid-column:auto}}
 </style></head>
 <body><div class="wrap">
 <h1>Outreach <em>analytics</em>.</h1>
@@ -144,92 +163,67 @@ tbody tr:hover{background:var(--surface)}
 
 <!-- ======================= BUYER PERSONA ======================= -->
 <div id="view-persona" class="view pv" hidden>
-  <div class="sub" style="margin-top:22px">El perfil de los que cierran · de 66 deals ganados (closed&nbsp;won)</div>
+  <div class="sub" style="margin-top:22px">El perfil de los que cierran · de <b>66 deals ganados</b> (closed&nbsp;won) · <span style="opacity:.6">se actualiza cada 3 semanas, los domingos</span></div>
+  <div class="bp-grid">
 
-  <p class="p-lead">Un negocio operativo <b>sano</b> — construcción, trucking, HVAC, servicios — con el cash flow estrangulado por <b>varios MCA apilados</b>. No busca que le borren la deuda: busca poder pagarla <b>sin ahogarse</b>, y que alguien lo proteja.</p>
-
-  <div class="p-stats">
-    <div class="s"><div class="n">66</div><div class="c">deals cerrados analizados</div></div>
-    <div class="s"><div class="n">$111<small>k</small></div><div class="c">deuda mediana ($20k–$520k)</div></div>
-    <div class="s"><div class="n">≈9<small>/10</small></div><div class="c">apilados: 2 a 6 MCAs</div></div>
-    <div class="s"><div class="n">−50/70<small>%</small></div><div class="c">reducción de pago que cierra</div></div>
-  </div>
-
-  <div class="p-angle">
-    <div class="k">★ El ángulo ganador — el atajo para el copy</div>
-    <div class="hook">“No estás huyendo de tu deuda — la vas a pagar, pero a un pago que <b>sí podés bancar</b>. Nuestros abogados renegocian tus [N] MCAs en <b>UN pago 50–70% más bajo</b>, les sacan los fees truchos, y te <b>blindan</b> del hostigamiento, los liens y las demandas.”</div>
-    <div class="cta"><span class="lbl">Camino de cierre que aceptan</span><br>
-      <span class="m">mandá los contratos de tus lenders → firmás el acuerdo → <span class="q">$500</span> para abrir el escrow → llamada de 10–15 min con el abogado → el abogado audita en 24–48h.</span><br>
-      Varios cierran en la misma llamada: <span class="q">“Where do I sign up?”</span> · <span class="q">“I accept.”</span>
+    <div class="bp-field">
+      <div class="bp-label"><span class="n">01</span> Firmográfico</div>
+      <div class="bp-box">
+        <div class="bp-line">Dueño-operador de un <b>negocio físico e intensivo en cash</b>, de 5 a 30 años de trayectoria — un negocio operativo <b>sano</b> ahogado por la deuda, no uno quebrado.</div>
+        <div class="bp-line"><b>Industrias:</b> ~55% trades/contratistas · ~15% transporte/auto · ~13% food/retail · ~14% salud/servicios. Casi cero e-commerce/oficina.</div>
+        <div class="bp-line"><b>Deuda mediana $111k</b> ($20k–$520k) · <b>≈9 de cada 10 apilados</b> en 2 a 6 MCAs.</div>
+        <div class="bp-line">Piensa en <b>“$X por semana / día”, nunca en APR</b>. Ingenuo con los MCA (“no sabía que la tasa era 56%”).</div>
+        <div class="bp-line">Repartidos por todo EEUU (pesa el Sur / Sun&nbsp;Belt). ~1 de cada 6 se atiende en <b>español</b>.</div>
+      </div>
+      <div class="bp-help">Industria, geografía y trayectoria de las empresas que cierran</div>
     </div>
-  </div>
 
-  <div class="p-sec">
-    <div class="p-shead"><span class="no">01</span><h3>Firmográficos · el quién</h3><span class="tag">identidad</span></div>
-    <p class="p-body">Dueño-operador de un <b>negocio físico, intensivo en cash</b>, de 5 a 30 años de trayectoria. Piensa en <b>“$X por semana / por día”, nunca en APR</b>. Competente en su oficio pero <b>ingenuo con los MCA</b> (“no sabía que la tasa era 56%”). ~1 de cada 6 se atiende en <b>español</b>. Repartidos por todo EEUU (pesa el Sur / Sun&nbsp;Belt).</p>
-    <div class="p-bars">
-      <div class="p-bar"><span class="nm">Trades / contratistas</span><span class="tk"><span class="fl" style="width:56%"></span></span><span class="pc">~55%</span></div>
-      <div class="p-bar"><span class="nm">Transporte / auto</span><span class="tk"><span class="fl" style="width:16%"></span></span><span class="pc">~15%</span></div>
-      <div class="p-bar"><span class="nm">Food / retail</span><span class="tk"><span class="fl" style="width:14%"></span></span><span class="pc">~13%</span></div>
-      <div class="p-bar"><span class="nm">Salud / servicios</span><span class="tk"><span class="fl" style="width:15%"></span></span><span class="pc">~14%</span></div>
+    <div class="bp-field">
+      <div class="bp-label"><span class="n">02</span> Pain points &amp; contexto</div>
+      <div class="bp-box">
+        <div class="bp-line">Un pago <b>diario/semanal</b> (<span class="amt">$3k–$20k/sem</span>, hay quien paga <span class="amt">$5,000/día</span>) que le <b>estrangula el cash flow</b>. <i>“La plata entra por adelante y sale por atrás.”</i></div>
+        <div class="bp-line"><b>≈9/10 apilados</b> — “pido uno para pagar el otro”. Llegan <b>al día pero ahogados</b>: la firma los agarra antes del default.</div>
+        <div class="bp-line">Tomaron el MCA de forma <b>defensiva</b> (cubrir un bache, una temporada lenta, la nómina), casi nunca por lujo.</div>
+        <div class="bp-line"><b>Aceptan la llamada</b> cuando el dolor se agudiza: un débito impagable, un <span class="neg">UCC lien / demanda</span>, o ya los quemó un <span class="neg">broker previo</span> (~1 de cada 3).</div>
+      </div>
+      <div class="bp-help">Qué les duele y por qué aceptan la llamada</div>
     </div>
-    <p class="p-body" style="color:var(--muted);font-size:13.5px;margin-top:14px">Roofing, eléctrica, HVAC, landscaping, concreto, welding, flooring · trucking, mudanzas, talleres · bares, restaurantes, retail · daycare, home care, quiroprácticos. <b>Casi cero e-commerce/oficina.</b></p>
-  </div>
 
-  <div class="p-sec">
-    <div class="p-shead"><span class="no">02</span><h3>El trigger &amp; la situación · el porqué</h3><span class="tag">contexto</span></div>
-    <p class="p-body"><b>El paraguas es siempre el mismo: un pago diario/semanal que le estrangula el cash flow</b> — <span class="amt">$3k–$20k/semana</span> es lo típico (hay quien paga <span class="amt">$5,000/día</span>). Su propia frase: <i>“la plata entra por la puerta de adelante y sale por la de atrás”.</i></p>
-    <p class="p-body"><b>≈9 de cada 10 están apilados</b> (2 a 6 MCAs) — “pido uno para pagar el otro”. La mayoría llega <b>al día pero ahogado</b>: la firma los agarra <b>antes del default</b>. Tomaron el MCA de forma <b>defensiva</b> — cubrir un bache, una temporada lenta, la nómina — casi nunca por lujo. Un cliente que no pagó, una obra demorada, y ahí arrancó la bola de nieve.</p>
-    <p class="p-body">Los disparadores, en orden: <b>(1)</b> pago impagable + crisis de cash flow · <b>(2)</b> ahogo por apilamiento · <b>(3)</b> <span class="neg">lo engañó un broker</span> o una firma previa (~1 de cada 3) · <b>(4)</b> un <span class="neg">UCC lien / demanda</span> que lo amenaza o le bloquea nuevo crédito · <b>(5)</b> un golpe puntual (se incendió el camión, un cliente lo estafó).</p>
-  </div>
-
-  <div class="p-sec">
-    <div class="p-shead"><span class="no">03</span><h3>Motivaciones &amp; criterios · qué lo mueve</h3><span class="tag">ranking</span></div>
-    <ol class="p-rank">
-      <li><div><b>Un pago que pueda bancar — alivio YA.</b> <span>El driver #1. Cierra cuando escucha el número nuevo y piensa “eso sí lo pago sin sudar”.</span></div></li>
-      <li><div><b>Protección legal.</b> <span>Que frenen el hostigamiento, las demandas y los liens. Abogados de su lado.</span></div></li>
-      <li><div><b>Destrabarse.</b> <span>Salir de la trampa / desbloquear crédito real (una SBA, una línea).</span></div></li>
-      <li><div><b>Justicia.</b> <span>Pagar lo justo, no la tasa predatoria ni los fees inflados.</span></div></li>
-    </ol>
-    <div class="p-pull">Insight de oro: <b>estos dueños QUIEREN pagar.</b> “I'm the one that got it”, “nunca me atrasé”, “no estoy huyendo”. No evaden — quieren sobrevivir con dignidad. Por eso el ángulo es <b>“reestructurar, no borrar la deuda”</b>.</div>
-    <p class="p-emo">Emoción dominante: <b>agobio</b> (casi universal — “me está matando”, “no duermo”) + <b>bronca por haber sido engañado</b> + miedo (quiebra, embargo, legal) + desconfianza (ya lo quemaron). En el cierre, el flip a <b>alivio/esperanza</b>.</p>
-  </div>
-
-  <div class="p-sec">
-    <div class="p-shead"><span class="no">04</span><h3>Objeciones &amp; cómo se desarman</h3><span class="tag">oro para SMS</span></div>
-    <div class="p-obj">
-      <div class="row"><div class="top">“¿Esto es diferente a la que ya me estafó?” · desconfianza / “too good to be true” <span class="fq">la #1</span></div>
-        <div class="bd"><div class="fl">Lo que la desarma</div>“Somos <b>attorney-led</b> desde el arranque. Hacemos esto <b>todos los días con TUS mismos lenders</b>, los auditamos y les volteamos los fees truchos. No cobramos nada por adelantado. No somos los brokers que te quemaron.”</div></div>
-      <div class="row"><div class="top">“¿Me van a seguir hostigando / demandar / congelar la cuenta?” <span class="fq">~1 de 4</span></div>
-        <div class="bd"><div class="fl">Lo que la desarma</div>Poder de abogado: <b>toman toda la comunicación</b>; el contrato nuevo pisa al original; “los UCC/COJ los manejamos todo el tiempo — así se levantan/mitigan”.</div></div>
-      <div class="row"><div class="top">“¿Tengo que poner plata adelante? No la tengo” · el fee <span class="fq">~1 de 4</span></div>
-        <div class="bd"><div class="fl">Lo que la desarma</div>Sin upfront (o solo <b>$500</b> para abrir el escrow). Fee flat (24.5–29.5%) <b>ya metido en el pago reducido</b>. “No cobramos completo hasta que funcione.”</div></div>
-      <div class="row"><div class="top">“¿Y mi crédito? / No quiero OTRO MCA” <span class="fq">~1 de 5</span></div>
-        <div class="bd"><div class="fl">Lo que la desarma</div>“Esto <b>NO es un préstamo ni una consolidación — es reestructuración</b>. Los MCA no reportan a crédito (son future receivables).”</div></div>
-      <div class="row"><div class="top">“Lo pienso / tengo que hablar con mi socio-esposa” · delay <span class="fq">~1 de 3</span></div>
-        <div class="bd"><div class="fl">Lo que la desarma</div>Anclar al <b>próximo débito</b> (“frenamos el draft de mañana”). <em>Es el punto más flojo de los closers — muchos ceden a callback — pero igual cierran por el número.</em></div></div>
+    <div class="bp-field">
+      <div class="bp-label"><span class="n">03</span> Drivers de compra</div>
+      <div class="bp-box">
+        <div class="bp-line"><b>#1 · Un pago que puedan bancar — alivio YA.</b> Cierra cuando escucha el número nuevo y piensa “eso sí lo pago sin sudar”.</div>
+        <div class="bp-line"><b>Protección legal.</b> Que frenen el hostigamiento, las demandas y los liens; abogados de su lado.</div>
+        <div class="bp-line"><b>Destrabarse.</b> Salir de la trampa y desbloquear crédito real (una SBA, una línea).</div>
+        <div class="bp-line"><b>Justicia.</b> Pagar lo justo, no la tasa predatoria ni los fees inflados.</div>
+        <div class="bp-line"><b>La clave:</b> QUIEREN pagar (“no estoy huyendo”) → <b>“reestructurar, no borrar”</b>: UN pago 50–70% más bajo + abogados que los blindan.</div>
+      </div>
+      <div class="bp-help">Qué los motiva a hacer MCA debt settlement · emoción dominante: agobio + bronca por el engaño</div>
     </div>
-  </div>
 
-  <div class="p-sec">
-    <div class="p-shead"><span class="no">05</span><h3>Voice of customer · sus palabras</h3><span class="tag">para espejear en el SMS</span></div>
-    <div class="p-voc">
-      <div><div class="gl">El ahogo del cash flow</div><div class="qs"><q>it's killing me</q><q>strangling my working capital</q><q>bleeding me dry</q><q>cleaning out the bank account every week</q><q>money in the front door, out the back door</q><q>I'm not getting any sleep</q></div></div>
-      <div><div class="gl">La trampa del apilamiento</div><div class="qs"><q>borrowing from Peter to pay Paul</q><q>taking loans to pay loans</q><q>hamster wheel</q><q>it's a hurricane</q><q>I never get ahead — I just pay it and reborrow it</q></div></div>
-      <div><div class="gl">Bronca por el engaño</div><div class="qs"><q>predators</q><q>legal loan sharking</q><q>I got screwed by a broker</q><q>I was naive, my bad</q><q>they make it too easy to borrow again</q></div></div>
-      <div><div class="gl">Quiere pagar (no evadir)</div><div class="qs"><q>I'm the one that got it, I wanna pay it</q><q>I've never missed a payment</q><q>I'm not running from it — I just want an affordable payment</q><q>I just need a little breathing room</q></div></div>
+    <div class="bp-field">
+      <div class="bp-label"><span class="n">04</span> Objeciones típicas &amp; cómo abordarlas</div>
+      <div class="bp-box">
+        <div class="bp-line"><span class="ob">“¿Esto es diferente a la que ya me estafó?”</span> (desconfianza, <b>la #1</b>) <span class="fix">→ Attorney-led desde el arranque; lo hacemos a diario con TUS mismos lenders y les volteamos los fees truchos. Cero upfront. “No somos los brokers que te quemaron.”</span></div>
+        <div class="bp-line"><span class="ob">“¿Me van a seguir hostigando / demandar?”</span> <span class="fix">→ Poder de abogado: toman toda la comunicación, el contrato nuevo pisa al original, los UCC/COJ se manejan y se mitigan.</span></div>
+        <div class="bp-line"><span class="ob">“¿Tengo que poner plata adelante? No la tengo.”</span> <span class="fix">→ Sin upfront (o solo $500 para abrir el escrow); el fee flat (24.5–29.5%) ya va metido en el pago reducido.</span></div>
+        <div class="bp-line"><span class="ob">“¿Y mi crédito? No quiero OTRO MCA.”</span> <span class="fix">→ No es préstamo ni consolidación, es <b>reestructuración</b>; los MCA no reportan a crédito (son future receivables).</span></div>
+        <div class="bp-line"><span class="ob">“Lo pienso / hablo con mi socio.”</span> (delay) <span class="fix">→ Anclar al próximo débito: “frenamos el draft de mañana”. Es el punto más flojo del cierre, pero igual cierran por el número.</span></div>
+      </div>
+      <div class="bp-help">Objection handling — la objeción típica y la frase que la desarma (oro para el copy del SMS)</div>
     </div>
-    <p class="p-body" style="color:var(--muted);font-size:13.5px;margin-top:18px">Piensa en <b>$/semana o $/día</b>, jamás en APR. Quiere <b>“un solo pago mensual”</b>. Nombra a sus lenders (OnDeck, Forward, Rapid…) — decir “conocemos a esos” genera confianza al toque.</p>
-  </div>
 
-  <div class="p-sec">
-    <div class="p-shead"><span class="no">06</span><h3>Variantes por industria</h3><span class="tag">para segmentar</span></div>
-    <div class="p-var">
-      <div class="c"><h4>🔨 Trades / construcción</h4><p><b>El núcleo (~55%).</b> Gap estacional + obras/draws demorados; el MCA para pagar subs y nómina. A menudo un <b>UCC que le bloquea una SBA</b>. Ángulo: alivio + destrabar el crédito real.</p></div>
-      <div class="c"><h4>🚚 Trucking / auto</h4><p>Pagos <b>diarios</b>, emergencias de <b>equipo</b> (se rompió/incendió el camión). Ángulo: parar el débito diario + respiro para el equipo.</p></div>
-      <div class="c"><h4>🍽️ Food / retail</h4><p>Inventario, estacionalidad, márgenes finos, pago diario. Ángulo: un pago mensual bajo para no drenar la caja diaria.</p></div>
-      <div class="c"><h4>🩺 Salud / servicios</h4><p>Timing de AR/seguros, expansión, deuda <b>cross-collateralized</b> y COJ. Suelen querer <b>mensual</b>. Ángulo: protección legal + simplificar a un pago.</p></div>
+    <div class="bp-field bp-wide">
+      <div class="bp-label"><span class="n">05</span> Estilo de comunicación</div>
+      <div class="bp-box">
+        <div class="bp-line">Piensa en <b>$/semana o $/día</b>, jamás en APR. Quiere <b>“un solo pago mensual”</b>.</div>
+        <div class="bp-line">Nombra a sus lenders (OnDeck, Forward, Rapid…) — decir “conocemos a esos” genera confianza al toque.</div>
+        <div class="bp-line"><b>Métricas que mira:</b> el monto del pago semanal/diario y el <b>% de reducción</b> — no el plazo ni la tasa.</div>
+        <div class="bp-line"><b>Sus frases:</b> <q>it's killing me</q> · <q>strangling my working capital</q> · <q>borrowing from Peter to pay Paul</q> · <q>hamster wheel</q> · <q>I got screwed by a broker</q> · <q>I'm not running from it</q> · <q>I'm the one that got it, I wanna pay it</q>.</div>
+      </div>
+      <div class="bp-help">Sus palabras y las métricas que observa — para espejear en el copy del SMS</div>
     </div>
+
   </div>
 
   <div class="p-foot">
