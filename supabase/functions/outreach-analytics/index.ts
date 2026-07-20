@@ -179,6 +179,19 @@ async function seed(cfg: Record<string, string>) {
   for (const m of maps) for (const [cid, name] of m) if (!contacts.has(cid)) contacts.set(cid, name);
   if (timedOut) return { error: "enum timeout", collected: contacts.size };
 
+  // GUARD anti-wipe: si GHL rate-limitea (429), la enumeracion junta 0/pocos y
+  // NO hay que truncar la cohorte buena. 0 nunca es legitimo aca (~38k). Si la
+  // nueva cae por debajo del 50% de la actual, se aborta SIN tocar la DB.
+  const lastGood = await withDb(async (c) => {
+    const r = await c.queryObject<{ n: bigint }>("select count(*)::bigint as n from sms_analytics.cohort");
+    return Number(r.rows[0].n);
+  });
+  const minOk = lastGood > 0 ? Math.floor(lastGood * 0.5) : 1;
+  if (contacts.size < minOk) {
+    return { error: "seed abortado: enum junto muy pocos (probable 429), cohorte preservada",
+      collected: contacts.size, minOk, lastGood };
+  }
+
   // Solo si termino la enumeracion: truncar + insertar (won se marca despues).
   const rows = [...contacts.entries()];
   await withDb(async (c) => {

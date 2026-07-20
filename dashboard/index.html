@@ -11,7 +11,7 @@
   --foreground:#171717; --muted:rgba(0,0,0,.6); --muted-2:rgba(0,0,0,.45);
   --border:#e5e7eb; --border-side:rgba(0,0,0,.05);
   --accent:#000000; --accent-fg:#ffffff; --highlight:#fef8d4;
-  --green:#16a34a; --danger:#dc2626;
+  --green:#16a34a; --green-soft:#e7f2ea; --danger:#dc2626; --danger-soft:#fbe9e9; --amber:#a16207;
   --font-sans:'Inter',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
   --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --radius:12px; --radius-lg:24px; --container:1152px;
@@ -53,13 +53,186 @@ tbody tr:hover{background:var(--surface)}
 .foot{margin-top:44px;font-size:12px;color:var(--muted-2);text-align:center;line-height:1.7}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--foreground);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:7px}
 @keyframes sp{to{transform:rotate(360deg)}}
+
+/* ---- top navigation tabs ---- */
+.tabs{display:flex;gap:2px;margin-top:26px;border-bottom:1px solid var(--border)}
+.tab{appearance:none;background:none;border:none;font-family:var(--font-sans);font-size:15px;font-weight:500;
+  color:var(--muted-2);padding:11px 18px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s}
+.tab:hover{color:var(--foreground)}
+.tab.on{color:var(--foreground);border-bottom-color:var(--accent)}
+.view[hidden]{display:none}
+
+/* ---- buyer persona view ---- */
+.pv{max-width:900px}
+.p-lead{font-size:16px;color:var(--muted);margin-top:12px;line-height:1.55;max-width:64ch}
+.p-lead b{color:var(--foreground);font-weight:600}
+.p-stats{margin-top:28px;display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.p-stats .s{background:var(--background);padding:16px 18px}
+.p-stats .n{font-family:var(--font-mono);font-size:22px;font-weight:700;letter-spacing:-.02em}
+.p-stats .n small{font-size:13px;color:var(--muted);font-weight:500}
+.p-stats .c{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.35}
+.p-angle{margin-top:34px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:var(--radius);padding:24px 26px}
+.p-angle .k{font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--green);font-weight:500}
+.p-angle .hook{font-size:20px;line-height:1.36;font-weight:300;letter-spacing:-.01em;margin:12px 0 0}
+.p-angle .hook b{font-weight:600}
+.p-angle .cta{margin-top:18px;padding-top:15px;border-top:1px dashed var(--border);font-size:13.5px;color:var(--muted);line-height:1.65}
+.p-angle .cta .q,.p-angle .cta .m{font-family:var(--font-mono)}
+.p-angle .cta .q{color:var(--green);font-weight:700}
+.p-sec{margin-top:38px;padding-top:34px;border-top:1px solid var(--border)}
+.p-shead{display:flex;align-items:baseline;gap:12px;margin-bottom:18px}
+.p-shead .no{font-family:var(--font-mono);font-size:12px;color:var(--muted-2)}
+.p-shead h3{font-size:18px;font-weight:500;letter-spacing:-.015em;margin:0}
+.p-shead .tag{margin-left:auto;font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-2)}
+.p-body{font-size:15px;line-height:1.6;color:var(--foreground);margin:0 0 13px;max-width:66ch}
+.p-body:last-child{margin-bottom:0}
+.p-body b{font-weight:600}.p-body .amt{font-family:var(--font-mono);font-weight:600;white-space:nowrap}.p-body .neg{color:var(--danger);font-weight:600}
+.p-bars{display:flex;flex-direction:column;gap:9px;margin:6px 0 4px}
+.p-bar{display:grid;grid-template-columns:180px 1fr auto;align-items:center;gap:12px}
+.p-bar .nm{font-size:14px}.p-bar .tk{height:9px;background:var(--card-2);border-radius:99px;overflow:hidden}
+.p-bar .fl{height:100%;background:var(--green);border-radius:99px}.p-bar .pc{font-family:var(--font-mono);font-size:12.5px;color:var(--muted);min-width:36px;text-align:right}
+.p-rank{list-style:none;counter-reset:r;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.p-rank li{counter-increment:r;display:flex;gap:13px;align-items:flex-start;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 15px}
+.p-rank li::before{content:counter(r);font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--green);background:var(--green-soft);width:25px;height:25px;flex:0 0 25px;border-radius:7px;display:grid;place-items:center;margin-top:1px}
+.p-rank li b{font-weight:600}.p-rank li span{color:var(--muted);font-size:14px}
+.p-pull{margin-top:15px;background:var(--green-soft);border-radius:10px;padding:15px 17px;font-size:14.5px;line-height:1.5}
+.p-pull b{color:var(--green);font-weight:700}
+.p-emo{margin-top:14px;font-size:14px;color:var(--muted);line-height:1.55}.p-emo b{color:var(--danger);font-weight:600}
+.p-obj{display:flex;flex-direction:column;gap:12px}
+.p-obj .row{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.p-obj .top{background:var(--danger-soft);padding:12px 15px;font-size:14px;font-weight:600;display:flex;gap:10px;align-items:baseline}
+.p-obj .top .fq{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--danger);white-space:nowrap;font-weight:700}
+.p-obj .bd{padding:12px 15px;font-size:14px;line-height:1.55}
+.p-obj .bd .fl{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--green);margin-bottom:5px}
+.p-obj .bd b{font-weight:600}
+.p-voc{display:flex;flex-direction:column;gap:18px}
+.p-voc .gl{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--amber);margin-bottom:9px}
+.p-voc .qs{display:flex;flex-wrap:wrap;gap:8px}
+.p-voc .qs q{font-size:14px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:7px 12px;quotes:none;font-style:italic}
+.p-voc .qs q::before,.p-voc .qs q::after{content:'"'}
+.p-var{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.p-var .c{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px}
+.p-var .c h4{margin:0 0 7px;font-size:14.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.p-var .c p{margin:0;font-size:13.5px;color:var(--muted);line-height:1.5}.p-var .c p b{color:var(--foreground);font-weight:600}
+.p-foot{margin-top:36px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;display:flex;gap:16px;align-items:flex-start}
+.p-foot .big{font-family:var(--font-mono);font-size:15px;font-weight:700;color:var(--green);white-space:nowrap;padding-top:2px}
+.p-foot .t{font-size:14px;color:var(--muted);line-height:1.55}.p-foot .t b{color:var(--foreground);font-weight:600}
+@media (max-width:640px){
+  .p-stats{grid-template-columns:repeat(2,1fr)} .p-var{grid-template-columns:1fr}
+  .p-bar{grid-template-columns:130px 1fr auto} h1{font-size:34px}
+}
 </style></head>
 <body><div class="wrap">
 <h1>Outreach <em>analytics</em>.</h1>
-<div class="sub">Performance by sequence · Live transfers ÷ contacts entered</div>
-<div class="stamp" id="stamp"></div>
-<div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
-<div class="foot" id="foot"></div>
+
+<nav class="tabs">
+  <button class="tab on" data-view="rendimiento" onclick="showTab('rendimiento')">Rendimiento</button>
+  <button class="tab" data-view="persona" onclick="showTab('persona')">Buyer Persona</button>
+</nav>
+
+<!-- ======================= RENDIMIENTO ======================= -->
+<div id="view-rendimiento" class="view">
+  <div class="sub" style="margin-top:22px">Performance by sequence · Live transfers ÷ contacts entered</div>
+  <div class="stamp" id="stamp"></div>
+  <div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<!-- ======================= BUYER PERSONA ======================= -->
+<div id="view-persona" class="view pv" hidden>
+  <div class="sub" style="margin-top:22px">El perfil de los que cierran · de 66 deals ganados (closed&nbsp;won)</div>
+
+  <p class="p-lead">Un negocio operativo <b>sano</b> — construcción, trucking, HVAC, servicios — con el cash flow estrangulado por <b>varios MCA apilados</b>. No busca que le borren la deuda: busca poder pagarla <b>sin ahogarse</b>, y que alguien lo proteja.</p>
+
+  <div class="p-stats">
+    <div class="s"><div class="n">66</div><div class="c">deals cerrados analizados</div></div>
+    <div class="s"><div class="n">$111<small>k</small></div><div class="c">deuda mediana ($20k–$520k)</div></div>
+    <div class="s"><div class="n">≈9<small>/10</small></div><div class="c">apilados: 2 a 6 MCAs</div></div>
+    <div class="s"><div class="n">−50/70<small>%</small></div><div class="c">reducción de pago que cierra</div></div>
+  </div>
+
+  <div class="p-angle">
+    <div class="k">★ El ángulo ganador — el atajo para el copy</div>
+    <div class="hook">“No estás huyendo de tu deuda — la vas a pagar, pero a un pago que <b>sí podés bancar</b>. Nuestros abogados renegocian tus [N] MCAs en <b>UN pago 50–70% más bajo</b>, les sacan los fees truchos, y te <b>blindan</b> del hostigamiento, los liens y las demandas.”</div>
+    <div class="cta"><span class="lbl">Camino de cierre que aceptan</span><br>
+      <span class="m">mandá los contratos de tus lenders → firmás el acuerdo → <span class="q">$500</span> para abrir el escrow → llamada de 10–15 min con el abogado → el abogado audita en 24–48h.</span><br>
+      Varios cierran en la misma llamada: <span class="q">“Where do I sign up?”</span> · <span class="q">“I accept.”</span>
+    </div>
+  </div>
+
+  <div class="p-sec">
+    <div class="p-shead"><span class="no">01</span><h3>Firmográficos · el quién</h3><span class="tag">identidad</span></div>
+    <p class="p-body">Dueño-operador de un <b>negocio físico, intensivo en cash</b>, de 5 a 30 años de trayectoria. Piensa en <b>“$X por semana / por día”, nunca en APR</b>. Competente en su oficio pero <b>ingenuo con los MCA</b> (“no sabía que la tasa era 56%”). ~1 de cada 6 se atiende en <b>español</b>. Repartidos por todo EEUU (pesa el Sur / Sun&nbsp;Belt).</p>
+    <div class="p-bars">
+      <div class="p-bar"><span class="nm">Trades / contratistas</span><span class="tk"><span class="fl" style="width:56%"></span></span><span class="pc">~55%</span></div>
+      <div class="p-bar"><span class="nm">Transporte / auto</span><span class="tk"><span class="fl" style="width:16%"></span></span><span class="pc">~15%</span></div>
+      <div class="p-bar"><span class="nm">Food / retail</span><span class="tk"><span class="fl" style="width:14%"></span></span><span class="pc">~13%</span></div>
+      <div class="p-bar"><span class="nm">Salud / servicios</span><span class="tk"><span class="fl" style="width:15%"></span></span><span class="pc">~14%</span></div>
+    </div>
+    <p class="p-body" style="color:var(--muted);font-size:13.5px;margin-top:14px">Roofing, eléctrica, HVAC, landscaping, concreto, welding, flooring · trucking, mudanzas, talleres · bares, restaurantes, retail · daycare, home care, quiroprácticos. <b>Casi cero e-commerce/oficina.</b></p>
+  </div>
+
+  <div class="p-sec">
+    <div class="p-shead"><span class="no">02</span><h3>El trigger &amp; la situación · el porqué</h3><span class="tag">contexto</span></div>
+    <p class="p-body"><b>El paraguas es siempre el mismo: un pago diario/semanal que le estrangula el cash flow</b> — <span class="amt">$3k–$20k/semana</span> es lo típico (hay quien paga <span class="amt">$5,000/día</span>). Su propia frase: <i>“la plata entra por la puerta de adelante y sale por la de atrás”.</i></p>
+    <p class="p-body"><b>≈9 de cada 10 están apilados</b> (2 a 6 MCAs) — “pido uno para pagar el otro”. La mayoría llega <b>al día pero ahogado</b>: la firma los agarra <b>antes del default</b>. Tomaron el MCA de forma <b>defensiva</b> — cubrir un bache, una temporada lenta, la nómina — casi nunca por lujo. Un cliente que no pagó, una obra demorada, y ahí arrancó la bola de nieve.</p>
+    <p class="p-body">Los disparadores, en orden: <b>(1)</b> pago impagable + crisis de cash flow · <b>(2)</b> ahogo por apilamiento · <b>(3)</b> <span class="neg">lo engañó un broker</span> o una firma previa (~1 de cada 3) · <b>(4)</b> un <span class="neg">UCC lien / demanda</span> que lo amenaza o le bloquea nuevo crédito · <b>(5)</b> un golpe puntual (se incendió el camión, un cliente lo estafó).</p>
+  </div>
+
+  <div class="p-sec">
+    <div class="p-shead"><span class="no">03</span><h3>Motivaciones &amp; criterios · qué lo mueve</h3><span class="tag">ranking</span></div>
+    <ol class="p-rank">
+      <li><div><b>Un pago que pueda bancar — alivio YA.</b> <span>El driver #1. Cierra cuando escucha el número nuevo y piensa “eso sí lo pago sin sudar”.</span></div></li>
+      <li><div><b>Protección legal.</b> <span>Que frenen el hostigamiento, las demandas y los liens. Abogados de su lado.</span></div></li>
+      <li><div><b>Destrabarse.</b> <span>Salir de la trampa / desbloquear crédito real (una SBA, una línea).</span></div></li>
+      <li><div><b>Justicia.</b> <span>Pagar lo justo, no la tasa predatoria ni los fees inflados.</span></div></li>
+    </ol>
+    <div class="p-pull">Insight de oro: <b>estos dueños QUIEREN pagar.</b> “I'm the one that got it”, “nunca me atrasé”, “no estoy huyendo”. No evaden — quieren sobrevivir con dignidad. Por eso el ángulo es <b>“reestructurar, no borrar la deuda”</b>.</div>
+    <p class="p-emo">Emoción dominante: <b>agobio</b> (casi universal — “me está matando”, “no duermo”) + <b>bronca por haber sido engañado</b> + miedo (quiebra, embargo, legal) + desconfianza (ya lo quemaron). En el cierre, el flip a <b>alivio/esperanza</b>.</p>
+  </div>
+
+  <div class="p-sec">
+    <div class="p-shead"><span class="no">04</span><h3>Objeciones &amp; cómo se desarman</h3><span class="tag">oro para SMS</span></div>
+    <div class="p-obj">
+      <div class="row"><div class="top">“¿Esto es diferente a la que ya me estafó?” · desconfianza / “too good to be true” <span class="fq">la #1</span></div>
+        <div class="bd"><div class="fl">Lo que la desarma</div>“Somos <b>attorney-led</b> desde el arranque. Hacemos esto <b>todos los días con TUS mismos lenders</b>, los auditamos y les volteamos los fees truchos. No cobramos nada por adelantado. No somos los brokers que te quemaron.”</div></div>
+      <div class="row"><div class="top">“¿Me van a seguir hostigando / demandar / congelar la cuenta?” <span class="fq">~1 de 4</span></div>
+        <div class="bd"><div class="fl">Lo que la desarma</div>Poder de abogado: <b>toman toda la comunicación</b>; el contrato nuevo pisa al original; “los UCC/COJ los manejamos todo el tiempo — así se levantan/mitigan”.</div></div>
+      <div class="row"><div class="top">“¿Tengo que poner plata adelante? No la tengo” · el fee <span class="fq">~1 de 4</span></div>
+        <div class="bd"><div class="fl">Lo que la desarma</div>Sin upfront (o solo <b>$500</b> para abrir el escrow). Fee flat (24.5–29.5%) <b>ya metido en el pago reducido</b>. “No cobramos completo hasta que funcione.”</div></div>
+      <div class="row"><div class="top">“¿Y mi crédito? / No quiero OTRO MCA” <span class="fq">~1 de 5</span></div>
+        <div class="bd"><div class="fl">Lo que la desarma</div>“Esto <b>NO es un préstamo ni una consolidación — es reestructuración</b>. Los MCA no reportan a crédito (son future receivables).”</div></div>
+      <div class="row"><div class="top">“Lo pienso / tengo que hablar con mi socio-esposa” · delay <span class="fq">~1 de 3</span></div>
+        <div class="bd"><div class="fl">Lo que la desarma</div>Anclar al <b>próximo débito</b> (“frenamos el draft de mañana”). <em>Es el punto más flojo de los closers — muchos ceden a callback — pero igual cierran por el número.</em></div></div>
+    </div>
+  </div>
+
+  <div class="p-sec">
+    <div class="p-shead"><span class="no">05</span><h3>Voice of customer · sus palabras</h3><span class="tag">para espejear en el SMS</span></div>
+    <div class="p-voc">
+      <div><div class="gl">El ahogo del cash flow</div><div class="qs"><q>it's killing me</q><q>strangling my working capital</q><q>bleeding me dry</q><q>cleaning out the bank account every week</q><q>money in the front door, out the back door</q><q>I'm not getting any sleep</q></div></div>
+      <div><div class="gl">La trampa del apilamiento</div><div class="qs"><q>borrowing from Peter to pay Paul</q><q>taking loans to pay loans</q><q>hamster wheel</q><q>it's a hurricane</q><q>I never get ahead — I just pay it and reborrow it</q></div></div>
+      <div><div class="gl">Bronca por el engaño</div><div class="qs"><q>predators</q><q>legal loan sharking</q><q>I got screwed by a broker</q><q>I was naive, my bad</q><q>they make it too easy to borrow again</q></div></div>
+      <div><div class="gl">Quiere pagar (no evadir)</div><div class="qs"><q>I'm the one that got it, I wanna pay it</q><q>I've never missed a payment</q><q>I'm not running from it — I just want an affordable payment</q><q>I just need a little breathing room</q></div></div>
+    </div>
+    <p class="p-body" style="color:var(--muted);font-size:13.5px;margin-top:18px">Piensa en <b>$/semana o $/día</b>, jamás en APR. Quiere <b>“un solo pago mensual”</b>. Nombra a sus lenders (OnDeck, Forward, Rapid…) — decir “conocemos a esos” genera confianza al toque.</p>
+  </div>
+
+  <div class="p-sec">
+    <div class="p-shead"><span class="no">06</span><h3>Variantes por industria</h3><span class="tag">para segmentar</span></div>
+    <div class="p-var">
+      <div class="c"><h4>🔨 Trades / construcción</h4><p><b>El núcleo (~55%).</b> Gap estacional + obras/draws demorados; el MCA para pagar subs y nómina. A menudo un <b>UCC que le bloquea una SBA</b>. Ángulo: alivio + destrabar el crédito real.</p></div>
+      <div class="c"><h4>🚚 Trucking / auto</h4><p>Pagos <b>diarios</b>, emergencias de <b>equipo</b> (se rompió/incendió el camión). Ángulo: parar el débito diario + respiro para el equipo.</p></div>
+      <div class="c"><h4>🍽️ Food / retail</h4><p>Inventario, estacionalidad, márgenes finos, pago diario. Ángulo: un pago mensual bajo para no drenar la caja diaria.</p></div>
+      <div class="c"><h4>🩺 Salud / servicios</h4><p>Timing de AR/seguros, expansión, deuda <b>cross-collateralized</b> y COJ. Suelen querer <b>mensual</b>. Ángulo: protección legal + simplificar a un pago.</p></div>
+    </div>
+  </div>
+
+  <div class="p-foot">
+    <div class="big">→ Fase 3</div>
+    <div class="t"><b>Esta persona sale de los 66 deals ganados reales</b> (transcripciones + análisis de IA de las llamadas). Es el input directo del <b>generador de secuencias</b>: cruzá este perfil con la data de rendimiento y la IA escribe SMS que hablan el idioma del que cierra — liderando con el apilamiento y el alivio del pago, no con copy genérico.</div>
+  </div>
+</div>
+
 </div>
 <script>
 var EP="https://ouszjnrkawvrwxjjgrxx.supabase.co/functions/v1/outreach-analytics";
@@ -67,6 +240,13 @@ var TOKEN=new URLSearchParams(location.search).get("token")||"";
 var DATA=null;
 var ORDER=["cc","cold","defdec"];
 var ST={win:30, tab:"cc", sort:"pos", metric:"reply"};
+
+function showTab(v){
+  document.querySelectorAll(".tab").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-view")==v)});
+  document.getElementById("view-rendimiento").hidden = v!="rendimiento";
+  document.getElementById("view-persona").hidden = v!="persona";
+  window.scrollTo(0,0);
+}
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function nf(v){return v==null?'<span class="nd">—</span>':v.toLocaleString("en-US")}
@@ -78,10 +258,6 @@ function bar(v,mx,col){
     +Math.max(mx?v/mx*100:0,3)+'%'+(col?';background:'+col:'')+'"></div></div></div>';
 }
 function W(){return (DATA&&DATA.windows&&DATA.windows[ST.win])||null}
-function metricOf(m){return ST.metric==="reply"?m.replyRate:ST.metric==="lt"?m.ltRate:m.dndRate}
-function countOf(m){return ST.metric==="reply"?m.replies:ST.metric==="lt"?m.lts:m.dnds}
-function metricName(){return ST.metric==="reply"?"Responses":ST.metric==="lt"?"Live transfers":"DNDs"}
-// Real sequence name (the exact GHL workflow label), used in the table AND the tabs.
 function seqName(k){
   var w=W(); if(w){var s=(w.sequences||[]).filter(function(x){return x.key==k})[0]; if(s&&s.label) return s.label;}
   return k;
