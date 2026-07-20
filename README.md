@@ -12,7 +12,7 @@ Estado: **backfill completo, clasificación incompleta.** Ver [Pendientes](#pend
 
 ## Cómo funciona
 
-Todo corre en Supabase (proyecto `ouszjnrkawvrwxjjgrxx` · *HappyDebt Platform*), esquema aislado
+Todo corre en Supabase (proyecto `voivhkugeepawdxoubgx` · *Outreach Analytics*), esquema aislado
 `sms_analytics`. Nada depende de una máquina local.
 
 ```
