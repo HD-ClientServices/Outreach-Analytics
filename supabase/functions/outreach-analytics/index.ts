@@ -477,7 +477,7 @@ async function build() {
         sequences: WF.map((w) => {
           const s = byWf[w.key] || { ing: 0, lt: 0 };
           return { key: w.key, label: w.label, ing: s.ing, lt: s.lt,
-            cr: s.ing ? Math.round(1000 * s.lt / s.ing) / 10 : null };
+            cr: s.ing ? Math.round(10000 * s.lt / s.ing) / 100 : null };
         }),
         unidentified: byWf["none"] || { ing: 0, lt: 0 },
         msgs: msgsByWf,
@@ -516,7 +516,7 @@ function perfMd(snap: any, win: string): string {
   md += "meta:\n  source: GoHighLevel SMS analytics (read-only)\n";
   md += "  snapshot_at: " + (snap.snapshotAt || snap.generatedAt || "") + "\n";
   md += "  window_days: " + win + "\n";
-  md += "  metric_defs: { conversion_to_LT: live_transfers/contacts_entered, resp_rate: responses/sent, lt_rate: msg_led_to_LT/sent, dnd_rate: opt_outs/sent }\n\n";
+  md += "  metric_defs: { conversion_to_LT: live_transfers/contacts_entered (2 decimals), resp_rate: responses/sent, lt_rate: msg_led_to_LT/sent, optout_rate: opt_outs/sent (opt-out = lead requested STOP, GHL auto-DND) }\n\n";
   md += "## perf.sequences [item: sequence-summary]\n";
   md += "| key | sequence | contacts_entered | live_transfers | conversion_to_LT |\n|---|---|--:|--:|--:|\n";
   const seqs = (w.sequences || []).slice().sort((a: any, b: any) => (b.cr == null ? -1 : b.cr) - (a.cr == null ? -1 : a.cr));
@@ -527,7 +527,7 @@ function perfMd(snap: any, win: string): string {
     const rows = ((w.msgs || {})[s.key] || []).slice().sort((a: any, b: any) => a.pos - b.pos);
     md += "## perf.messages." + s.key + " [item: message-set] — " + s.label + "\n";
     if (!rows.length) { md += "(no messages with 5+ sends in this window)\n\n"; continue; }
-    md += "| sms# | message | sent | responses | resp% | LT | LT% | DND | DND% |\n|--:|---|--:|--:|--:|--:|--:|--:|--:|\n";
+    md += "| sms# | message | sent | responses | resp% | LT | LT% | opt_out | opt_out% |\n|--:|---|--:|--:|--:|--:|--:|--:|--:|\n";
     for (const m of rows) {
       const txt = String(m.tmpl || "").replace(/\|/g, "/").replace(/\s*\n\s*/g, " ");
       md += "| " + m.pos + " | " + txt + " | " + m.sends + " | " + m.replies + " | " + m.replyRate + "% | " + m.lts + " | " + m.ltRate + "% | " + m.dnds + " | " + m.dndRate + "% |\n";
@@ -537,8 +537,8 @@ function perfMd(snap: any, win: string): string {
     const bD = rows.slice().sort((a: any, b: any) => b.dndRate - a.dndRate)[0];
     md += "\nbest_response: sms#" + bR.pos + " (" + bR.replyRate + "%)\n";
     md += "best_LT: sms#" + bL.pos + " (" + bL.ltRate + "%)\n";
-    md += "highest_DND_avoid: sms#" + bD.pos + " (" + bD.dndRate + "%)\n";
-    md += "copy_signal: model new copy on the best-response and best-LT message structures; rewrite/soften the highest-DND message.\n\n";
+    md += "highest_optout_avoid: sms#" + bD.pos + " (" + bD.dndRate + "%)\n";
+    md += "copy_signal: model new copy on the best-response and best-LT message structures; rewrite/soften the highest-opt-out message.\n\n";
   }
   return md;
 }

@@ -136,7 +136,7 @@ tbody tr:hover{background:var(--surface)}
       <div class="sub" style="margin-top:0">Performance by sequence · Live transfers ÷ contacts entered</div>
       <div class="stamp" id="stamp"></div>
     </div>
-    <button class="pill" id="refreshBtn" onclick="startRefresh()" title="Trae la actividad nueva desde el último refresh (además del automático de los domingos)">↻ Actualizar</button>
+    <button class="pill" id="refreshBtn" onclick="startRefresh()" title="Trae la actividad nueva desde el último refresh (además del automático de los domingos)">↻ Refresh</button>
   </div>
   <div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
   <div class="foot" id="foot"></div>
@@ -259,7 +259,7 @@ function ago(iso){if(!iso)return"";var h=(Date.now()-new Date(iso).getTime())/36
   if(h<1)return Math.round(h*60)+" min";if(h<48)return Math.round(h)+" h";return Math.round(h/24)+" d"}
 function bar(v,mx,col){
   if(v==null)return '<div class="crcell"><span class="crval nd">—</span><div class="track"></div></div>';
-  return '<div class="crcell"><span class="crval">'+v+'%</span><div class="track"><div class="fill" style="width:'
+  return '<div class="crcell"><span class="crval">'+v.toFixed(2)+'%</span><div class="track"><div class="fill" style="width:'
     +Math.max(mx?v/mx*100:0,3)+'%'+(col?';background:'+col:'')+'"></div></div></div>';
 }
 function W(){return (DATA&&DATA.windows&&DATA.windows[ST.win])||null}
@@ -280,8 +280,8 @@ function render(){
    + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Sequence</span><div class="grp" id="tabs"></div></div></div>'
    + '<div class="card"><div style="overflow-x:auto"><table><thead><tr>'
    + '<th class="num" style="width:52px">SMS #</th><th style="min-width:260px">Message</th>'
-   + '<th class="num">Sent</th><th class="num">Responses</th><th class="num">Live transfers</th><th class="num">DND</th>'
-   + '<th class="num">Resp. rate</th><th class="num">LT rate</th><th class="num">DND rate</th>'
+   + '<th class="num">Sent</th><th class="num">Responses</th><th class="num">Live transfers</th><th class="num">Opt-out</th>'
+   + '<th class="num">Resp. rate</th><th class="num">LT rate</th><th class="num">Opt-out rate</th>'
    + '</tr></thead><tbody id="t2"></tbody></table></div></div></div>';
   document.getElementById("app").innerHTML=H;
   wins();t1();pills();t2();
@@ -293,12 +293,14 @@ function render(){
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
   return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}
 function t1(){
-  var rows=(W().sequences||[]).slice().sort(function(a,b){return (b.cr==null?-1:b.cr)-(a.cr==null?-1:a.cr)});
-  var mx=Math.max.apply(null,rows.map(function(r){return r.cr||0}).concat([1]));
+  var rows=(W().sequences||[]).slice();
+  rows.forEach(function(r){ r._cr = (r.ing ? 100*r.lt/r.ing : null); }); // CR crudo (2 decimales)
+  rows.sort(function(a,b){return (b._cr==null?-1:b._cr)-(a._cr==null?-1:a._cr)});
+  var mx=Math.max.apply(null,rows.map(function(r){return r._cr||0}).concat([0.0001]));
   document.getElementById("t1").innerHTML=rows.map(function(s){
     var small=s.ing!=null&&s.ing<50?'<span class="chip">small sample</span>':'';
     return '<tr><td><div class="seqname">'+esc(s.label)+small+'</div></td>'
-      +'<td class="num">'+nf(s.lt)+'</td><td class="num">'+nf(s.ing)+'</td><td>'+bar(s.cr,mx)+'</td></tr>';
+      +'<td class="num">'+nf(s.lt)+'</td><td class="num">'+nf(s.ing)+'</td><td>'+bar(s._cr,mx)+'</td></tr>';
   }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">No data.</td></tr>';
 }
 function pills(){
@@ -306,7 +308,7 @@ function pills(){
     '<span class="pill'+(ST.sort=="pos"?' on':'')+'" onclick="ST.sort=\'pos\';pills();t2()">Position</span>'
    +'<span class="pill'+(ST.sort=="reply"?' on':'')+'" onclick="ST.sort=\'reply\';pills();t2()">Response rate</span>'
    +'<span class="pill'+(ST.sort=="lt"?' on':'')+'" onclick="ST.sort=\'lt\';pills();t2()">LT rate</span>'
-   +'<span class="pill'+(ST.sort=="dnd"?' on':'')+'" onclick="ST.sort=\'dnd\';pills();t2()">DND rate</span>';
+   +'<span class="pill'+(ST.sort=="dnd"?' on':'')+'" onclick="ST.sort=\'dnd\';pills();t2()">Opt-out rate</span>';
   document.getElementById("tabs").innerHTML=ORDER.map(function(k){
     return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';pills();t2()">'+esc(seqName(k))+'</span>'}).join("");
 }
@@ -348,7 +350,7 @@ var _pollT=null;
 function startRefresh(){
   var b=document.getElementById("refreshBtn");if(!b)return;
   var t0=Date.now();
-  b.classList.add("on");b.textContent="Actualizando…";b.style.pointerEvents="none";
+  b.classList.add("on");b.textContent="Refreshing…";b.style.pointerEvents="none";
   fetch(EP+"?action=refresh&token="+encodeURIComponent(TOKEN)).then(function(r){return r.json()}).catch(function(){});
   clearTimeout(_pollT);
   (function poll(){
@@ -357,12 +359,12 @@ function startRefresh(){
       var built=st.note==="built"&&st.finished_at&&new Date(st.finished_at).getTime()>t0-3000;
       if(built){
         loadData().then(function(){
-          b.classList.remove("on");b.style.pointerEvents="";b.textContent="Actualizado ✓";
-          setTimeout(function(){b.textContent="↻ Actualizar"},3500);
+          b.classList.remove("on");b.style.pointerEvents="";b.textContent="Refreshed ✓";
+          setTimeout(function(){b.textContent="↻ Refresh"},3500);
         });
       }else{
         var dn=st.done||0,tt=st.total||0;
-        b.textContent=tt?("Procesando "+dn.toLocaleString("en-US")+"/"+tt.toLocaleString("en-US")+"…"):"Actualizando…";
+        b.textContent=tt?("Processing "+dn.toLocaleString("en-US")+"/"+tt.toLocaleString("en-US")+"…"):"Refreshing…";
         _pollT=setTimeout(poll,6000);
       }
     }).catch(function(){_pollT=setTimeout(poll,8000)});
