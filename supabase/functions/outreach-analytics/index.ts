@@ -557,6 +557,70 @@ async function context(win: string): Promise<string> {
   });
 }
 
+// ---- FASE 3: generador de secuencias SMS con IA (rendimiento + persona + voz de marca) ----
+async function generate(cfg: Record<string, string>, body: any) {
+  const akey = cfg.anthropic_api_key;
+  if (!akey) return { error: "Falta 'anthropic_api_key' en la tabla sms_analytics.config. Agregala en el Table Editor de Supabase y reintenta." };
+  const model = cfg.gen_model || "claude-sonnet-5";
+  const brief = (body && body.brief) || {};
+  const win = String(brief.win || "30");
+  const nMsgs = Math.min(Math.max(parseInt(brief.messages) || 6, 3), 12);
+  const nVars = Math.min(Math.max(parseInt(brief.variants) || 2, 1), 3);
+  const goal = String(brief.goal || "cold outreach to stacked owners who are current but drowning").slice(0, 400);
+  const audience = String(brief.audience || "use the persona as-is").slice(0, 400);
+  const lang = String(brief.lang || "English").slice(0, 40);
+
+  const inputs = await withDb(async (c) => {
+    const q = await c.queryObject<{ data: any; created_at: string }>(
+      "select data, created_at from sms_analytics.snapshots_v2 order by id desc limit 1");
+    const snap = q.rows[0] ? { ...q.rows[0].data, snapshotAt: q.rows[0].created_at } : null;
+    const p = await c.queryObject<{ md: string }>("select md from sms_analytics.context_docs where key='persona'");
+    const b = await c.queryObject<{ md: string }>("select md from sms_analytics.context_docs where key='brandvoice'");
+    return { perf: perfMd(snap, win), persona: (p.rows[0] && p.rows[0].md) || "(none)", brand: (b.rows[0] && b.rows[0].md) || "(none)" };
+  });
+
+  const sys = [
+    "You are an elite outbound SMS copywriter for a U.S. MCA (merchant cash advance) debt-restructuring firm.",
+    "Your job: write SMS sequences that make stacked small-business owners REPLY and accept a live transfer to a closer.",
+    "You are given three inputs: PERFORMANCE DATA (which message structures empirically convert — reply/live-transfer/opt-out rates per message, plus best-response, best-LT and highest-opt-out signals), BUYER PERSONA (who closes and why, in their own words), and BRAND VOICE (tone, promise, allowed claims, compliance guardrails).",
+    "Principles:",
+    "- Ground every choice in the DATA + PERSONA. Lead with the winning angle: stacking + one affordable payment (up to 50-70% lower) + legal shield. They WANT to pay — never imply debt erasure or evasion.",
+    "- Model structure on the best-response and best-LT messages; avoid the structure of the highest-opt-out message.",
+    "- Mirror the persona's exact language and metrics (weekly/daily $, % reduction; name lenders like OnDeck/Forward). Pre-empt the #1 objection (distrust) early: attorney-led, no upfront, we know your lenders.",
+    "- Keep each SMS tight (aim under 160 chars). Use the existing merge tokens where natural: {nombre} (first name), {opener} (rep name), {monto} (amount).",
+    "- Compliance (A2P 10DLC): the FIRST message MUST identify the sender and offer opt-out (e.g. 'Reply STOP to opt out'); stay truthful; use 'up to' with any %.",
+    "- Produce testable VARIANTS with distinct hooks/angles so performance can compare them — not one final copy.",
+    "Respond with ONLY valid JSON (no markdown fences, no prose) matching the schema in the user message.",
+  ].join("\n");
+
+  const schema = '{"variants":[{"name":"short label","angle":"the core hook in one line","messages":[{"n":1,"day":0,"text":"SMS text with merge tokens","why":"one-line rationale citing a data or persona signal"}]}],"notes":"what to A/B test between the variants"}';
+
+  const user = "PERFORMANCE DATA:\n" + inputs.perf + "\n\n===\n\nBUYER PERSONA:\n" + inputs.persona + "\n\n===\n\nBRAND VOICE:\n" + inputs.brand +
+    "\n\n===\n\nBRIEF:\n- Goal: " + goal + "\n- Audience: " + audience + "\n- Messages per sequence: " + nMsgs + "\n- Variants: " + nVars + "\n- Language: " + lang +
+    "\n\nReturn ONLY JSON in this exact shape:\n" + schema;
+
+  const t0 = Date.now();
+  let r: Response;
+  try {
+    r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: 8000, temperature: 0.7, system: sys, messages: [{ role: "user", content: user }] }),
+    });
+  } catch (e) { return { error: "fetch a Anthropic falló: " + String(e) }; }
+  if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 400) };
+  const j = await r.json();
+  const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
+  let parsed: any = null;
+  try { parsed = JSON.parse(text.replace(/^```(json)?\s*/i, "").replace(/\s*```$/i, "").trim()); } catch (_) { /* keep raw */ }
+  if (parsed && Array.isArray(parsed.variants)) {
+    for (const v of parsed.variants) for (const m of (v.messages || [])) if (m && typeof m.text === "string") m.chars = m.text.length;
+  }
+  return { ok: true, model, elapsedMs: Date.now() - t0,
+    brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win },
+    usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
@@ -575,6 +639,10 @@ Deno.serve(async (req) => {
       const md = await context(url.searchParams.get("win") || "30");
       return new Response(md, { status: 200, headers: { "content-type": "text/plain; charset=utf-8", "access-control-allow-origin": "*" } });
     }
+    if (action === "generate") {
+      const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+      return json(await generate(cfg, body));
+    }
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
@@ -592,6 +660,6 @@ Deno.serve(async (req) => {
       });
       return json(r ? { ...r.data, snapshotAt: r.created_at } : { empty: true });
     }
-    return json({ error: "acciones: seed | work | build | status | data" }, 400);
+    return json({ error: "acciones: seed | refresh | markwon | context | generate | work | build | status | data" }, 400);
   } catch (e) { return json({ error: String(e) }, 500); }
 });

@@ -139,6 +139,40 @@ tbody tr:hover{background:var(--surface)}
 .bp-help{font-size:12.5px;color:var(--muted-2);margin-top:9px;line-height:1.45}
 .bp-wide{grid-column:1 / -1}
 @media (max-width:760px){.bp-grid{grid-template-columns:1fr;gap:22px}.bp-wide{grid-column:auto}}
+
+/* ---- generador (Fase 3) ---- */
+.gv{max-width:1040px}
+.gform{margin-top:26px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px 18px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px}
+.gfield{display:flex;flex-direction:column;gap:6px;min-width:0}
+.gfield.gf-wide{grid-column:1 / -1}
+.gfield label{font-size:12px;font-weight:600;color:var(--foreground)}
+.gfield label .opt{color:var(--muted-2);font-weight:400}
+.gfield input,.gfield textarea,.gfield select{font-family:var(--font-sans);font-size:14px;color:var(--foreground);background:var(--background);border:1px solid var(--border);border-radius:8px;padding:9px 11px;outline:none;width:100%}
+.gfield textarea{resize:vertical;line-height:1.5}
+.gfield input:focus,.gfield textarea:focus,.gfield select:focus{border-color:var(--foreground)}
+.gf-actions{flex-direction:row;align-items:center;gap:14px;margin-top:2px}
+.gbtn{font-family:var(--font-sans);font-size:14px;font-weight:600;color:var(--accent-fg);background:var(--accent);border:none;border-radius:999px;padding:11px 22px;cursor:pointer}
+.gbtn:disabled{opacity:.55;cursor:default}
+.ghint{font-size:12.5px;color:var(--muted-2)}
+.gen-note{margin-top:22px}
+.gen-var{margin-top:22px;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;background:var(--background)}
+.gen-vhead{padding:16px 20px;border-bottom:1px solid var(--border);background:var(--card)}
+.gen-vhead .nm{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.gen-vhead .ang{font-size:13.5px;color:var(--muted);margin-top:3px;line-height:1.45}
+.gen-msg{display:grid;grid-template-columns:46px 1fr;gap:14px;padding:14px 20px;border-bottom:1px solid var(--border-side)}
+.gen-msg:last-child{border-bottom:none}
+.gen-msg .idx{font-family:var(--font-mono);font-size:12px;color:var(--muted-2);padding-top:1px}
+.gen-msg .idx .day{display:block;font-size:10px;margin-top:3px;color:var(--muted-2)}
+.gen-txt{font-size:14.5px;line-height:1.5;color:var(--foreground)}
+.gen-meta{display:flex;gap:12px;margin-top:7px;flex-wrap:wrap;align-items:center}
+.gen-chars{font-family:var(--font-mono);font-size:11px;color:var(--muted-2)}
+.gen-chars.over{color:var(--danger)}
+.gen-why{font-size:12.5px;color:var(--muted);line-height:1.45;flex:1;min-width:180px}
+.gen-copy{font-size:11px;font-weight:600;color:var(--muted);background:var(--card);border:1px solid var(--border);border-radius:6px;padding:3px 9px;cursor:pointer;white-space:nowrap}
+.gen-copy:hover{color:var(--foreground);border-color:rgba(0,0,0,.25)}
+.gen-err{margin-top:22px;background:var(--danger-soft);border:1px solid var(--danger);border-radius:var(--radius);padding:14px 18px;font-size:13.5px;color:var(--danger);line-height:1.55}
+.gen-err pre{white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:12px;margin:8px 0 0}
+@media (max-width:760px){.gform{grid-template-columns:1fr 1fr}}
 </style></head>
 <body><div class="wrap">
 <h1>Outreach <em>analytics</em>.</h1>
@@ -146,6 +180,7 @@ tbody tr:hover{background:var(--surface)}
 <nav class="tabs">
   <button class="tab on" data-view="rendimiento" onclick="showTab('rendimiento')">Rendimiento</button>
   <button class="tab" data-view="persona" onclick="showTab('persona')">Buyer Persona</button>
+  <button class="tab" data-view="generador" onclick="showTab('generador')">Generador</button>
 </nav>
 
 <!-- ======================= RENDIMIENTO ======================= -->
@@ -232,6 +267,44 @@ tbody tr:hover{background:var(--surface)}
   </div>
 </div>
 
+<!-- ======================= GENERADOR (FASE 3) ======================= -->
+<div id="view-generador" class="view gv" hidden>
+  <div class="sub" style="margin-top:22px">Fase 3 · genera secuencias nuevas cruzando <b>rendimiento</b> + <b>buyer persona</b> + <b>voz de marca</b> con IA. Propone variantes A/B para testear — <b>no envía nada</b>, vos revisás y aprobás.</div>
+
+  <div class="gform">
+    <div class="gfield gf-wide">
+      <label>Objetivo de la secuencia</label>
+      <textarea id="g_goal" rows="2" placeholder="Ej: cold outreach a contractors apilados que están al día pero ahogados">cold outreach to stacked owners who are current but drowning</textarea>
+    </div>
+    <div class="gfield gf-wide">
+      <label>Audiencia / segmento <span class="opt">(opcional)</span></label>
+      <input id="g_aud" type="text" placeholder="Ej: trades/construcción con un UCC lien que les bloquea una SBA" />
+    </div>
+    <div class="gfield">
+      <label>Mensajes por secuencia</label>
+      <input id="g_msgs" type="number" min="3" max="12" value="6" />
+    </div>
+    <div class="gfield">
+      <label>Variantes A/B</label>
+      <input id="g_vars" type="number" min="1" max="3" value="2" />
+    </div>
+    <div class="gfield">
+      <label>Idioma</label>
+      <select id="g_lang"><option value="English">English</option><option value="Spanish">Español</option></select>
+    </div>
+    <div class="gfield">
+      <label>Ventana de datos</label>
+      <select id="g_win"><option value="30">30 días</option><option value="14">14 días</option><option value="7">7 días</option></select>
+    </div>
+    <div class="gfield gf-wide gf-actions">
+      <button class="gbtn" id="genBtn" onclick="genRun()">Generar secuencias</button>
+      <span class="ghint">Cruza los datos en vivo con Claude · ~10–25s</span>
+    </div>
+  </div>
+
+  <div id="genOut"></div>
+</div>
+
 </div>
 <script>
 var EP="https://ouszjnrkawvrwxjjgrxx.supabase.co/functions/v1/outreach-analytics";
@@ -244,7 +317,58 @@ function showTab(v){
   document.querySelectorAll(".tab").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-view")==v)});
   document.getElementById("view-rendimiento").hidden = v!="rendimiento";
   document.getElementById("view-persona").hidden = v!="persona";
+  document.getElementById("view-generador").hidden = v!="generador";
   window.scrollTo(0,0);
+}
+
+function genRun(){
+  var btn=document.getElementById("genBtn"), out=document.getElementById("genOut");
+  var brief={
+    goal:document.getElementById("g_goal").value.trim(),
+    audience:document.getElementById("g_aud").value.trim(),
+    messages:parseInt(document.getElementById("g_msgs").value)||6,
+    variants:parseInt(document.getElementById("g_vars").value)||2,
+    lang:document.getElementById("g_lang").value,
+    win:document.getElementById("g_win").value
+  };
+  btn.disabled=true; btn.textContent="Generando…";
+  out.innerHTML='<div class="sub" style="margin-top:24px"><span class="spin"></span>La IA está escribiendo las secuencias…</div>';
+  fetch(EP+"?action=generate&token="+encodeURIComponent(TOKEN),{
+    method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({brief:brief})
+  }).then(function(r){return r.json()}).then(function(d){
+    btn.disabled=false; btn.textContent="Generar secuencias";
+    if(d.error){ out.innerHTML='<div class="gen-err"><b>Error:</b> '+esc(d.error)+'</div>'; return; }
+    genRender(d);
+  }).catch(function(e){
+    btn.disabled=false; btn.textContent="Generar secuencias";
+    out.innerHTML='<div class="gen-err"><b>Error de red:</b> '+esc(String(e))+'</div>';
+  });
+}
+function genRender(d){
+  var out=document.getElementById("genOut"), res=d.result;
+  if(!res||!res.variants){
+    out.innerHTML='<div class="gen-err">La IA no devolvió JSON válido.<pre>'+esc(d.raw||"(vacío)")+'</pre></div>'; return;
+  }
+  var H='<div class="sub gen-note">'+res.variants.length+' variante(s) · modelo '+esc(d.model||"")+' · '+Math.round((d.elapsedMs||0)/1000)+'s'+(d.usage&&d.usage.output_tokens?(' · '+d.usage.output_tokens+' tokens'):'')+'</div>';
+  res.variants.forEach(function(v){
+    H+='<div class="gen-var"><div class="gen-vhead"><div class="nm">'+esc(v.name||"Variante")+'</div>'+(v.angle?'<div class="ang">'+esc(v.angle)+'</div>':'')+'</div>';
+    (v.messages||[]).forEach(function(m){
+      var chars=m.chars!=null?m.chars:String(m.text||"").length;
+      H+='<div class="gen-msg"><div class="idx">#'+(m.n!=null?m.n:"")+(m.day!=null?'<span class="day">día '+m.day+'</span>':'')+'</div>'
+        +'<div><div class="gen-txt">'+esc(m.text||"")+'</div><div class="gen-meta">'
+        +'<span class="gen-chars'+(chars>160?' over':'')+'">'+chars+' chars</span>'
+        +(m.why?'<span class="gen-why">'+esc(m.why)+'</span>':'')
+        +'<span class="gen-copy" onclick="genCopy(this)">copiar</span>'
+        +'</div></div></div>';
+    });
+    H+='</div>';
+  });
+  if(res.notes) H+='<div class="note" style="margin-top:20px"><b>Qué A/B testear:</b> '+esc(res.notes)+'</div>';
+  out.innerHTML=H;
+}
+function genCopy(el){
+  var t=el.parentElement.parentElement.querySelector(".gen-txt").textContent;
+  navigator.clipboard.writeText(t).then(function(){var o=el.textContent;el.textContent="copiado ✓";setTimeout(function(){el.textContent=o},1400)});
 }
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
