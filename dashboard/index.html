@@ -131,8 +131,13 @@ tbody tr:hover{background:var(--surface)}
 
 <!-- ======================= RENDIMIENTO ======================= -->
 <div id="view-rendimiento" class="view">
-  <div class="sub" style="margin-top:22px">Performance by sequence · Live transfers ÷ contacts entered</div>
-  <div class="stamp" id="stamp"></div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-top:22px;flex-wrap:wrap">
+    <div>
+      <div class="sub" style="margin-top:0">Performance by sequence · Live transfers ÷ contacts entered</div>
+      <div class="stamp" id="stamp"></div>
+    </div>
+    <button class="pill" id="refreshBtn" onclick="startRefresh()" title="Trae la actividad nueva desde el último refresh (además del automático de los domingos)">↻ Actualizar</button>
+  </div>
   <div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
   <div class="foot" id="foot"></div>
 </div>
@@ -324,12 +329,43 @@ function t2(){
       +'</tr>';
   }).join("")||'<tr><td colspan="9" class="nd" style="padding:20px">No messages with 5+ sends in this window.</td></tr>';
 }
-fetch(EP+"?action=data&token="+encodeURIComponent(TOKEN))
-  .then(function(r){return r.json()})
-  .then(function(d){
-    if(d.error){document.getElementById("app").innerHTML='<div class="note">Unauthorized. Check the token in the link.</div>';return}
-    if(d.empty){document.getElementById("app").innerHTML='<div class="note">No data yet: the extraction hasn\'t finished.</div>';return}
-    DATA=d;render();
-  })
-  .catch(function(e){document.getElementById("app").innerHTML='<div class="note">Error loading data: '+esc(String(e))+'</div>'});
+function loadData(){
+  return fetch(EP+"?action=data&token="+encodeURIComponent(TOKEN))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.error){document.getElementById("app").innerHTML='<div class="note">Unauthorized. Check the token in the link.</div>';return}
+      if(d.empty){if(!DATA)document.getElementById("app").innerHTML='<div class="note">No data yet: the extraction hasn\'t finished.</div>';return}
+      DATA=d;try{localStorage.setItem("oa_data",JSON.stringify(d))}catch(e){}render();
+    })
+    .catch(function(e){if(!DATA)document.getElementById("app").innerHTML='<div class="note">Error loading data: '+esc(String(e))+'</div>'});
+}
+// Cache: pinta al instante lo ultimo guardado y refresca en segundo plano (sin "Loading…").
+try{var _c=localStorage.getItem("oa_data");if(_c){DATA=JSON.parse(_c);render();}}catch(e){}
+loadData();
+
+// Boton de refresh: dispara la actualizacion on-demand y muestra el progreso hasta reconstruir.
+var _pollT=null;
+function startRefresh(){
+  var b=document.getElementById("refreshBtn");if(!b)return;
+  var t0=Date.now();
+  b.classList.add("on");b.textContent="Actualizando…";b.style.pointerEvents="none";
+  fetch(EP+"?action=refresh&token="+encodeURIComponent(TOKEN)).then(function(r){return r.json()}).catch(function(){});
+  clearTimeout(_pollT);
+  (function poll(){
+    fetch(EP+"?action=status&token="+encodeURIComponent(TOKEN)).then(function(r){return r.json()}).then(function(st){
+      var b=document.getElementById("refreshBtn");if(!b)return;
+      var built=st.note==="built"&&st.finished_at&&new Date(st.finished_at).getTime()>t0-3000;
+      if(built){
+        loadData().then(function(){
+          b.classList.remove("on");b.style.pointerEvents="";b.textContent="Actualizado ✓";
+          setTimeout(function(){b.textContent="↻ Actualizar"},3500);
+        });
+      }else{
+        var dn=st.done||0,tt=st.total||0;
+        b.textContent=tt?("Procesando "+dn.toLocaleString("en-US")+"/"+tt.toLocaleString("en-US")+"…"):"Actualizando…";
+        _pollT=setTimeout(poll,6000);
+      }
+    }).catch(function(){_pollT=setTimeout(poll,8000)});
+  })();
+}
 </script></body></html>

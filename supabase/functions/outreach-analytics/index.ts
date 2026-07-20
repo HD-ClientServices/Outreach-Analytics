@@ -205,8 +205,61 @@ async function seed(cfg: Record<string, string>) {
     }
     await c.queryObject(
       `update sms_analytics.run set started_at=now(), seeded=$1, finished_at=null, note='seeded-conv' where id=1`, [rows.length]);
+    await c.queryArray(
+      `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(t0)]);
   });
   return { seeded: rows.length, chunks: nDays, elapsedMs: Date.now() - t0 };
+}
+
+// ---- REFRESH: actualizacion on-demand. Si la cohorte no esta poblada -> full
+// (seed, ~2h). Si esta poblada -> INCREMENTAL: solo trae los contactos con
+// actividad NUEVA desde el ultimo refresh y los re-encola (done=false); el drain
+// procesa solo ese delta (minutos). Poda los que quedaron fuera de la ventana.
+async function refresh(cfg: Record<string, string>) {
+  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
+  const t0 = Date.now();
+  const cohortN = await withDb(async (c) => {
+    const r = await c.queryObject<{ n: bigint }>("select count(*)::bigint as n from sms_analytics.cohort");
+    return Number(r.rows[0].n);
+  });
+  if (cohortN < 10000) { const r = await seed(cfg); return { mode: "full", cohortWas: cohortN, ...r }; }
+
+  const lr = await withDb(async (c) => {
+    const r = await c.queryObject<{ value: string }>("select value from sms_analytics.config where key='last_refresh_ms'");
+    return r.rows[0]?.value ? Number(r.rows[0].value) : (t0 - 3 * 86400000);
+  });
+  const since = lr - 12 * 3600000; // 12h de overlap para agarrar conversaciones actualizadas
+  const contacts = new Map<string, string>();
+  let cursor = String(since), pages = 0; const deadline = t0 + 110000;
+  while (pages < 800 && Date.now() < deadline) {
+    const u = BASE + "/conversations/search?locationId=" + loc + "&limit=100&sortBy=last_message_date&sort=asc&startAfterDate=" + cursor;
+    const d = await gget(u, key);
+    const convs = d?.conversations ?? [];
+    if (!convs.length) break;
+    for (const cv of convs) { const cid = cv.contactId; if (cid) contacts.set(cid, cv.contactName || cv.fullName || ""); }
+    const lastLmd = convs[convs.length - 1]?.lastMessageDate ?? 0;
+    let nc = String(lastLmd); if (nc === cursor) nc = String(lastLmd + 1);
+    cursor = nc; pages++;
+    if (convs.length < 100) break;
+  }
+  const rows = [...contacts.entries()];
+  await withDb(async (c) => {
+    for (let i = 0; i < rows.length; i += 500) {
+      const chunk = rows.slice(i, i + 500);
+      const vals = chunk.map((_, j) => `($${j * 2 + 1},$${j * 2 + 2},false)`).join(",");
+      const args = chunk.flatMap((r) => [r[0], r[1]]);
+      // nuevos -> insert (done=false); existentes -> reset a not-done para re-procesar.
+      await c.queryArray(
+        `insert into sms_analytics.cohort(contact_id,name,won) values ${vals}
+         on conflict (contact_id) do update set done=false, attempts=0`, args);
+    }
+    await c.queryObject(
+      `delete from sms_analytics.cohort where entered_at is not null and entered_at < now() - ($1 || ' days')::interval`, [String(WINDOW_DAYS + 3)]);
+    await c.queryArray(
+      `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(t0)]);
+    await c.queryObject(`update sms_analytics.run set started_at=now(), finished_at=null, note='refresh-inc' where id=1`);
+  });
+  return { mode: "incremental", delta: rows.length, pages, elapsedMs: Date.now() - t0 };
 }
 
 // ---- MARKWON: marca cohort.won desde oportunidades ganadas (numerador LT) ----
@@ -445,6 +498,7 @@ async function status() {
               (select count(*) from sms_analytics.msg_events)::int as events,
               (select count(*) from sms_analytics.cohort where won)::int as won,
               (select seeded from sms_analytics.run where id=1) as seeded,
+              (select note from sms_analytics.run where id=1) as note,
               (select started_at from sms_analytics.run where id=1) as started_at,
               (select finished_at from sms_analytics.run where id=1) as finished_at`);
     return r.rows[0];
@@ -515,6 +569,7 @@ Deno.serve(async (req) => {
 
   try {
     if (action === "seed") return json(await seed(cfg));
+    if (action === "refresh") return json(await refresh(cfg));
     if (action === "markwon") return json(await markwon(cfg));
     if (action === "context") {
       const md = await context(url.searchParams.get("win") || "30");
