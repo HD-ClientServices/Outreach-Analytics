@@ -120,23 +120,23 @@ tbody tr:hover{background:var(--surface)}
   .p-stats{grid-template-columns:repeat(2,1fr)} .p-var{grid-template-columns:1fr}
   .p-bar{grid-template-columns:130px 1fr auto} h1{font-size:34px}
 }
-/* ---- persona: campos estilo formulario (prototipo "Edit Additional Information") ---- */
-.bp-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px 34px;margin-top:32px;align-items:start}
+/* ---- persona: campos estilo formulario (réplica "Edit Additional Information") ---- */
+.bp-grid{display:grid;grid-template-columns:1fr 1fr;gap:26px 40px;margin-top:32px;align-items:stretch}
 .bp-field{display:flex;flex-direction:column}
-.bp-label{font-size:15px;font-weight:600;color:var(--foreground);letter-spacing:-.01em;margin-bottom:10px;display:flex;align-items:baseline;gap:8px}
-.bp-label .n{font-family:var(--font-mono);font-size:11px;font-weight:500;color:var(--green)}
-.bp-box{border:1px solid var(--border);border-radius:10px;background:var(--background);padding:16px 19px}
-.bp-line{font-size:14px;line-height:1.55;color:var(--foreground);margin:0 0 13px}
+.bp-label{font-size:15px;font-weight:700;color:#213a54;letter-spacing:-.005em;margin-bottom:9px;display:flex;align-items:baseline;gap:8px}
+.bp-label .n{font-family:var(--font-mono);font-size:11px;font-weight:500;color:#98a2b3}
+.bp-box{border:1px solid #d6dce3;border-radius:8px;background:#ffffff;padding:18px 20px;flex:1}
+.bp-line{font-size:14.5px;line-height:1.5;color:#37424f;margin:0 0 15px}
 .bp-line:last-child{margin-bottom:0}
-.bp-line b{font-weight:600}
-.bp-line i{color:var(--muted);font-style:italic}
-.bp-line .amt{font-family:var(--font-mono);font-weight:600;white-space:nowrap}
+.bp-line b{font-weight:600;color:#213a54}
+.bp-line i{color:#667085;font-style:italic}
+.bp-line .amt{font-weight:600;color:#213a54;white-space:nowrap}
 .bp-line .neg{color:var(--danger);font-weight:600}
-.bp-line .ob{font-weight:600}
-.bp-line .fix{color:var(--muted)}
-.bp-line q{quotes:none;font-style:italic;color:var(--muted)}
+.bp-line .ob{font-weight:700;color:#213a54}
+.bp-line .fix{color:#5b6675}
+.bp-line q{quotes:none;font-style:italic;color:#667085}
 .bp-line q::before{content:'“'}.bp-line q::after{content:'”'}
-.bp-help{font-size:12.5px;color:var(--muted-2);margin-top:9px;line-height:1.45}
+.bp-help{font-size:13px;color:#667085;margin-top:9px;line-height:1.45}
 .bp-wide{grid-column:1 / -1}
 @media (max-width:760px){.bp-grid{grid-template-columns:1fr;gap:22px}.bp-wide{grid-column:auto}}
 </style></head>
