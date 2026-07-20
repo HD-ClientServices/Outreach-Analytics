@@ -451,6 +451,58 @@ async function status() {
   });
 }
 
+// ---- CONTEXT: salida markdown estandarizada, consumible por IA (Fase 3) ------
+// Cada item (secuencia, set de mensajes, bloque de persona) sale con datos +
+// un copy_signal accionable. Rendimiento se genera del snapshot en vivo; la
+// persona se lee de context_docs. Se sirve como text/plain markdown.
+function perfMd(snap: any, win: string): string {
+  const w = snap && snap.windows && snap.windows[win];
+  if (!w) return "# SMS PERFORMANCE\n(no data for window " + win + ")\n";
+  let md = "# SMS PERFORMANCE — 3 sequences (window: " + win + "d)\n";
+  md += "meta:\n  source: GoHighLevel SMS analytics (read-only)\n";
+  md += "  snapshot_at: " + (snap.snapshotAt || snap.generatedAt || "") + "\n";
+  md += "  window_days: " + win + "\n";
+  md += "  metric_defs: { conversion_to_LT: live_transfers/contacts_entered, resp_rate: responses/sent, lt_rate: msg_led_to_LT/sent, dnd_rate: opt_outs/sent }\n\n";
+  md += "## perf.sequences [item: sequence-summary]\n";
+  md += "| key | sequence | contacts_entered | live_transfers | conversion_to_LT |\n|---|---|--:|--:|--:|\n";
+  const seqs = (w.sequences || []).slice().sort((a: any, b: any) => (b.cr == null ? -1 : b.cr) - (a.cr == null ? -1 : a.cr));
+  for (const s of seqs) md += "| " + s.key + " | " + s.label + " | " + (s.ing == null ? "-" : s.ing) + " | " + (s.lt == null ? "-" : s.lt) + " | " + (s.cr == null ? "-" : s.cr + "%") + " |\n";
+  const u = w.unidentified || { ing: 0, lt: 0 };
+  md += "\nnote: outside these 3 sequences = " + u.ing + " contacts / " + u.lt + " LT (other workflows or manual sends).\n\n";
+  for (const s of (w.sequences || [])) {
+    const rows = ((w.msgs || {})[s.key] || []).slice().sort((a: any, b: any) => a.pos - b.pos);
+    md += "## perf.messages." + s.key + " [item: message-set] — " + s.label + "\n";
+    if (!rows.length) { md += "(no messages with 5+ sends in this window)\n\n"; continue; }
+    md += "| sms# | message | sent | responses | resp% | LT | LT% | DND | DND% |\n|--:|---|--:|--:|--:|--:|--:|--:|--:|\n";
+    for (const m of rows) {
+      const txt = String(m.tmpl || "").replace(/\|/g, "/").replace(/\s*\n\s*/g, " ");
+      md += "| " + m.pos + " | " + txt + " | " + m.sends + " | " + m.replies + " | " + m.replyRate + "% | " + m.lts + " | " + m.ltRate + "% | " + m.dnds + " | " + m.dndRate + "% |\n";
+    }
+    const bR = rows.slice().sort((a: any, b: any) => b.replyRate - a.replyRate)[0];
+    const bL = rows.slice().sort((a: any, b: any) => b.ltRate - a.ltRate)[0];
+    const bD = rows.slice().sort((a: any, b: any) => b.dndRate - a.dndRate)[0];
+    md += "\nbest_response: sms#" + bR.pos + " (" + bR.replyRate + "%)\n";
+    md += "best_LT: sms#" + bL.pos + " (" + bL.ltRate + "%)\n";
+    md += "highest_DND_avoid: sms#" + bD.pos + " (" + bD.dndRate + "%)\n";
+    md += "copy_signal: model new copy on the best-response and best-LT message structures; rewrite/soften the highest-DND message.\n\n";
+  }
+  return md;
+}
+async function context(win: string): Promise<string> {
+  return await withDb(async (c) => {
+    const q = await c.queryObject<{ data: any; created_at: string }>(
+      "select data, created_at from sms_analytics.snapshots_v2 order by id desc limit 1");
+    const snap = q.rows[0] ? { ...q.rows[0].data, snapshotAt: q.rows[0].created_at } : null;
+    const p = await c.queryObject<{ md: string }>("select md from sms_analytics.context_docs where key='persona'");
+    const personaMd = (p.rows[0] && p.rows[0].md) || "(persona doc missing)";
+    const head = "# OUTREACH ANALYTICS — AI CONTEXT PACK\n"
+      + "_Standardized markdown for a downstream sequence-generation AI._\n"
+      + "_Panel 1 = SMS PERFORMANCE (what empirically converts). Panel 2 = BUYER PERSONA (who closes & why)._\n"
+      + "_Each item carries `data:` + a `copy_signal:` (actionable direction). Generated live._\n\n---\n\n";
+    return head + perfMd(snap, win) + "\n---\n\n" + personaMd + "\n";
+  });
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
@@ -464,6 +516,10 @@ Deno.serve(async (req) => {
   try {
     if (action === "seed") return json(await seed(cfg));
     if (action === "markwon") return json(await markwon(cfg));
+    if (action === "context") {
+      const md = await context(url.searchParams.get("win") || "30");
+      return new Response(md, { status: 200, headers: { "content-type": "text/plain; charset=utf-8", "access-control-allow-origin": "*" } });
+    }
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
