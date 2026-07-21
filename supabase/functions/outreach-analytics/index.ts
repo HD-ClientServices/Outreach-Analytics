@@ -706,7 +706,7 @@ function checkCompliance(raw: string): { text: string; ok: boolean; violations: 
 
 // ---- FASE 3: generador de secuencias SMS con IA (rendimiento + persona + voz de marca) ----
 async function generate(cfg: Record<string, string>, body: any) {
-  const akey = cfg.anthropic_api_key;
+  const akey = (cfg.anthropic_api_key || "").trim();
   if (!akey) return { error: "Falta 'anthropic_api_key' en la tabla sms_analytics.config. Agregala en el Table Editor de Supabase y reintenta." };
   const model = cfg.gen_model || "claude-sonnet-5";
   const brief = (body && body.brief) || {};
@@ -756,7 +756,7 @@ async function generate(cfg: Record<string, string>, body: any) {
     r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 8000, temperature: 0.7, system: sys, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model, max_tokens: 8000, system: sys, messages: [{ role: "user", content: user }] }),
     });
   } catch (e) { return { error: "fetch a Anthropic falló: " + String(e) }; }
   if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 400) };
@@ -790,7 +790,7 @@ async function generate(cfg: Record<string, string>, body: any) {
       const rr = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model, max_tokens: 2000, temperature: 0.4, system: rsys, messages: [{ role: "user", content: "Rewrite each to fix its violations:\n" + JSON.stringify(bad) }] }),
+        body: JSON.stringify({ model, max_tokens: 2000, system: rsys, messages: [{ role: "user", content: "Rewrite each to fix its violations:\n" + JSON.stringify(bad) }] }),
       });
       if (rr.ok) {
         const rj = await rr.json();
@@ -821,7 +821,7 @@ async function generate(cfg: Record<string, string>, body: any) {
 // ---- INSIGHTS con IA: lectura masticada de los mejores/peores (on-demand) -----
 // Toma los insights deterministas del snapshot y pide a la IA un resumen accionable.
 async function insightAi(cfg: Record<string, string>, win: string) {
-  const akey = cfg.anthropic_api_key;
+  const akey = (cfg.anthropic_api_key || "").trim();
   if (!akey) return { error: "Falta 'anthropic_api_key' en sms_analytics.config." };
   const model = cfg.gen_model || "claude-sonnet-5";
   const snap = await withDb(async (c) => {
@@ -848,7 +848,7 @@ async function insightAi(cfg: Record<string, string>, win: string) {
     r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 600, temperature: 0.5, system: sys, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model, max_tokens: 600, system: sys, messages: [{ role: "user", content: user }] }),
     });
   } catch (e) { return { error: "fetch a Anthropic fallo: " + String(e) }; }
   if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 300) };
