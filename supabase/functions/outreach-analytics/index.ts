@@ -557,6 +557,85 @@ async function context(win: string): Promise<string> {
   });
 }
 
+// ---- COMPLIANCE: reglas SMS hardcodeadas (de investigación A2P/carriers) ------
+// Dos capas de defensa: (1) sesgar el vocabulario del modelo desde el prompt, y
+// (2) validar + limpiar CADA mensaje generado despues, para que las reglas se
+// cumplan en codigo y no sean solo una sugerencia al modelo.
+const SMS_MAX_CHARS = 150; // solo el cuerpo; el cliente agrega el opt-out aparte, downstream
+
+// Lista negra dura — nunca permitido, en ninguna forma (case-insensitive, word-boundary).
+const BLOCKLIST: string[] = [
+  "debt", "debts", "loan", "loans", "lending",
+  "consolidate", "consolidation", "debt consolidation",
+  "settle", "settlement", "debt settlement",
+  "forgiveness", "debt forgiveness", "debt relief", "debt reduction",
+  "credit repair", "bad credit", "no credit check",
+  "pre-approved", "preapproved", "pre approved",
+  "guaranteed", "guarantee", "free", "risk-free", "risk free", "100% free",
+  "free money", "extra cash", "cash bonus", "fast cash",
+  "eliminate", "wipe out", "get rid of", "erase your debt",
+  "irs", "lawsuit", "legal action", "sue", "garnish", "garnishment", "seize", "arrest",
+  "act now", "urgent", "final notice", "last chance", "apply now",
+];
+
+// Sustituciones seguras para el vertical MCA / restructuring (sesga al modelo).
+const SUBSTITUTIONS: [string, string][] = [
+  ["debt", "balances / positions"],
+  ["loan", "advance / funding"],
+  ["consolidate", "restructure your positions"],
+  ["settle", "resolve / restructure"],
+  ["forgiveness", "lower monthly payments"],
+  ["get rid of", "restructure"],
+  ["eliminate", "improve cash flow"],
+  ["guaranteed", "you may qualify"],
+  ["free", "complimentary / no-cost"],
+  ["pre-approved", "you may pre-qualify"],
+];
+
+const SHORTENERS = ["bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly", "is.gd", "buff.ly", "rebrand.ly"];
+// Caracteres que fuerzan UCS-2 (segmentos de 70) y son señal de spam.
+const UCS2_CHARS = /[‐-―‘’“”…•]|[\u{1F000}-\u{1FAFF}]|[☀-➿]|[←-⇿]/u;
+const CAPS_OK = ["SMS", "MCA", "LLC", "USA", "SBA", "UCC", "APR", "US"];
+
+const COMPLIANCE_BANNED = BLOCKLIST.join(", ");
+const COMPLIANCE_SUBS = SUBSTITUTIONS.map(([a, b]) => a + " -> " + b).join("; ");
+
+function reEscape(s: string): string { return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&"); }
+
+// Quita cualquier lenguaje de opt-out / STOP / HELP / rates que el modelo agregue.
+function stripOptOut(s: string): string {
+  return String(s || "")
+    .replace(/\b(reply|text|send)\s+stop\b[^.;!?\n]*/gi, "")
+    .replace(/\bstop\s*(2|to)\s+\w+[^.;!?\n]*/gi, "")
+    .replace(/\b(opt[\s-]?out|unsubscribe|reply\s+help)\b[^.;!?\n]*/gi, "")
+    .replace(/\bmsg\s*&?\s*data\s*rates?(\s*may)?\s*apply\b\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,;!?])/g, "$1")
+    .replace(/([.,;!?])[.,;!?]+/g, "$1")
+    .trim();
+}
+
+// Compuerta de compliance para un SMS. Devuelve texto limpio + violaciones.
+function checkCompliance(raw: string): { text: string; ok: boolean; violations: string[] } {
+  const violations: string[] = [];
+  const text = stripOptOut(raw);
+  const lower = text.toLowerCase();
+
+  for (const term of BLOCKLIST) {
+    const re = new RegExp("\\b" + reEscape(term).replace(/ +/g, "\\s+") + "\\b", "i");
+    if (re.test(lower)) violations.push('banned: "' + term + '"');
+  }
+  if (text.length > SMS_MAX_CHARS) violations.push("too long: " + text.length + "/" + SMS_MAX_CHARS);
+  if (UCS2_CHARS.test(text)) violations.push("non-GSM char (emoji/smart-quote/em-dash) -> UCS-2");
+  for (const d of SHORTENERS) if (lower.includes(d)) violations.push("link shortener: " + d);
+  const caps = (text.match(/\b[A-Z]{2,}\b/g) || []).filter((w) => !CAPS_OK.includes(w));
+  if (caps.length) violations.push("ALL-CAPS: " + caps.join(", "));
+  if ((text.match(/[!?]/g) || []).length > 1) violations.push("excessive ! or ?");
+  if (/\b(100%|will save|always save)\b/i.test(text)) violations.push("absolute promise");
+
+  return { text, ok: violations.length === 0, violations };
+}
+
 // ---- FASE 3: generador de secuencias SMS con IA (rendimiento + persona + voz de marca) ----
 async function generate(cfg: Record<string, string>, body: any) {
   const akey = cfg.anthropic_api_key;
@@ -587,8 +666,12 @@ async function generate(cfg: Record<string, string>, body: any) {
     "- Ground every choice in the DATA + PERSONA. Lead with the winning angle: stacking + one affordable payment (up to 50-70% lower) + legal shield. They WANT to pay — never imply debt erasure or evasion.",
     "- Model structure on the best-response and best-LT messages; avoid the structure of the highest-opt-out message.",
     "- Mirror the persona's exact language and metrics (weekly/daily $, % reduction; name lenders like OnDeck/Forward). Pre-empt the #1 objection (distrust) early: attorney-led, no upfront, we know your lenders.",
-    "- Keep each SMS tight (aim under 160 chars). Use the existing merge tokens where natural: {nombre} (first name), {opener} (rep name), {monto} (amount).",
-    "- Compliance (A2P 10DLC): the FIRST message MUST identify the sender and offer opt-out (e.g. 'Reply STOP to opt out'); stay truthful; use 'up to' with any %.",
+    "- HARD LIMIT: every SMS MUST be 150 characters or fewer, counting spaces and merge tokens. Shorter is better. Use the existing merge tokens where natural: {nombre} (first name), {opener} (rep name), {monto} (amount).",
+    "- NEVER include opt-out, STOP, HELP, unsubscribe, or 'msg & data rates' language anywhere — not even on the first message. The client appends the legally-required opt-out separately, downstream. Any STOP/opt-out text is stripped automatically and counts as a failure.",
+    "- Identify the sender by rep name ({opener}) and stay truthful; always use 'up to' with any percentage. Do NOT add any compliance/opt-out footer.",
+    "- BANNED WORDS (hardcoded; auto-flagged in code after you write — never use, in any form or casing): " + COMPLIANCE_BANNED + ".",
+    "- Prefer these safer substitutions instead: " + COMPLIANCE_SUBS + ".",
+    "- Plain ASCII only: no emojis, no smart quotes or em-dashes, no ALL-CAPS words, at most one '!' or '?' in total, no link shorteners.",
     "- Produce testable VARIANTS with distinct hooks/angles so performance can compare them — not one final copy.",
     "Respond with ONLY valid JSON (no markdown fences, no prose) matching the schema in the user message.",
   ].join("\n");
@@ -613,11 +696,23 @@ async function generate(cfg: Record<string, string>, body: any) {
   const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
   let parsed: any = null;
   try { parsed = JSON.parse(text.replace(/^```(json)?\s*/i, "").replace(/\s*```$/i, "").trim()); } catch (_) { /* keep raw */ }
+  let checked = 0, flagged = 0;
   if (parsed && Array.isArray(parsed.variants)) {
-    for (const v of parsed.variants) for (const m of (v.messages || [])) if (m && typeof m.text === "string") m.chars = m.text.length;
+    for (const v of parsed.variants) for (const m of (v.messages || [])) {
+      if (m && typeof m.text === "string") {
+        const chk = checkCompliance(m.text);
+        m.text = chk.text;              // opt-out language ya removido
+        m.chars = chk.text.length;
+        m.compliant = chk.ok;
+        m.violations = chk.violations;
+        checked++; if (!chk.ok) flagged++;
+      }
+    }
   }
   return { ok: true, model, elapsedMs: Date.now() - t0,
     brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win },
+    compliance: { checked, flagged, maxChars: SMS_MAX_CHARS,
+      note: "Las reglas de palabras/formato se aplican aca, pero el outbound frio de MCA/debt-restructuring es una categoria que T-Mobile/Twilio/TCR prohiben formalmente: la entregabilidad depende de la reputacion del numero, el consentimiento y la rotacion, no solo del copy." },
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
 }
 
