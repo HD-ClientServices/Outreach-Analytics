@@ -395,6 +395,7 @@ function render(){
   var w=W(); if(!w){document.getElementById("app").innerHTML='<div class="note">No data for this window.</div>';return}
   var H="";
   H+='<div class="controls" style="margin-top:22px"><div class="grp"><span class="lbl">Window</span><div class="grp" id="wins"></div></div></div>';
+  H+='<div class="sec" id="insSec"><h2>Insights · messages to replicate &amp; retire</h2><div class="h">Best structures to clone vs. worst to remove — pooled across sequences, ranked by LT + response − opt-out. Also fed into the sequence generator.</div><div id="insBody"></div></div>';
   H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate</div>'
    + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
    + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
@@ -407,11 +408,49 @@ function render(){
    + '<th class="num">Resp. rate</th><th class="num">LT rate</th><th class="num">Opt-out rate</th>'
    + '</tr></thead><tbody id="t2"></tbody></table></div></div></div>';
   document.getElementById("app").innerHTML=H;
-  wins();t1();pills();t2();
+  wins();insightsView();t1();pills();t2();
   document.getElementById("stamp").textContent="Data from "+ago(DATA.snapshotAt||DATA.generatedAt)+" ago · "+ST.win+"-day window";
   var u=w.unidentified||{ing:0,lt:0};
   document.getElementById("foot").innerHTML="Source: GoHighLevel API v2 (read-only) · sms_analytics schema<br>"
     +"Outside the 3 sequences: "+nf(u.ing)+" contacts · "+nf(u.lt)+" LT (other workflows or manual sends)";
+}
+var AI_READ_CACHE={};
+function aiRead(){
+  var b=document.getElementById('aiReadBtn'), out=document.getElementById('aiReadOut');
+  if(!b||!out) return;
+  b.textContent='Reading…'; b.style.pointerEvents='none';
+  fetch(EP+"?action=insight_ai&win="+ST.win+"&token="+encodeURIComponent(TOKEN))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      b.textContent='✨ AI read'; b.style.pointerEvents='';
+      if(d.error){ out.innerHTML='<span class="nd">'+esc(d.error)+'</span>'; return; }
+      var html='<div class="note" style="white-space:pre-wrap;line-height:1.55">'+esc(d.narrative||'')+'</div>';
+      AI_READ_CACHE[ST.win]=html; out.innerHTML=html;
+    })
+    .catch(function(){ b.textContent='✨ AI read'; b.style.pointerEvents=''; out.innerHTML='<span class="nd">Network error</span>'; });
+}
+function insightsView(){
+  var w=W(); var el=document.getElementById("insBody"); if(!el) return;
+  var ins=w&&w.insights;
+  if(!ins||((!ins.replicate||!ins.replicate.length)&&(!ins.remove||!ins.remove.length))){
+    el.innerHTML='<div class="note">No message-level insights yet — they appear after the next data build (needs messages with '+((ins&&ins.minSends)||10)+'+ sends).</div>';
+    return;
+  }
+  function col(items,good){
+    var head=good?'✅ Replicate these':'⚠️ Remove these', c=good?'#16a34a':'var(--danger,#dc2626)';
+    var h='<div style="flex:1;min-width:280px"><div style="font-weight:600;margin-bottom:10px;color:'+c+'">'+head+'</div>';
+    if(!items.length) h+='<div class="nd">—</div>';
+    items.forEach(function(m){
+      h+='<div style="padding:10px 0;border-top:1px solid var(--line,rgba(0,0,0,.08))">'
+        +'<div style="margin-bottom:4px">'+esc(m.text)+'</div>'
+        +'<div style="font-family:var(--font-mono,monospace);font-size:11px;color:var(--muted-2,#9a9a9a)">'+esc(m.seq)+' · #'+m.pos+' — resp '+m.replyRate+'% · LT '+m.ltRate+'% · opt-out '+m.dndRate+'% · '+m.sends+' sent</div>'
+        +'<div style="font-size:12px;margin-top:3px;color:'+c+'">'+esc(m.reason)+'</div></div>';
+    });
+    return h+'</div>';
+  }
+  el.innerHTML='<div class="card" style="display:flex;gap:28px;flex-wrap:wrap">'+col(ins.replicate||[],true)+col(ins.remove||[],false)+'</div>'
+    +'<div style="margin-top:12px"><button class="pill" id="aiReadBtn" onclick="aiRead()">✨ AI read</button><div id="aiReadOut" style="margin-top:12px"></div></div>';
+  if(AI_READ_CACHE[ST.win]&&document.getElementById('aiReadOut')) document.getElementById('aiReadOut').innerHTML=AI_READ_CACHE[ST.win];
 }
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
   return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}

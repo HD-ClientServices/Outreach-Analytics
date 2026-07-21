@@ -430,6 +430,64 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
 }
 
 // ---- BUILD: arma el snapshot con las 3 ventanas -----------------------------
+// ---- INSIGHTS: mejores/peores mensajes (deterministico; alimenta UI + generador) ----
+// Un mensaje BUENO = alta resp + alto LT + bajo opt-out. MALO = lo inverso (o alto opt-out).
+// LT es la metrica-plata (peso x2); el opt-out se penaliza (x2). Devuelve replicate/remove.
+function insOneLine(s: string): string {
+  return String(s || "").replace(/\|/g, "/").replace(/\s*\n\s*/g, " ").trim().slice(0, 140);
+}
+function computeInsights(win: any): any {
+  const seqLabel: Record<string, string> = {};
+  for (const s of (win.sequences || [])) seqLabel[s.key] = s.label;
+  const pool: any[] = [];
+  for (const wf of Object.keys(win.msgs || {})) {
+    for (const m of (win.msgs[wf] || [])) pool.push({ ...m, wf, seq: seqLabel[wf] || wf });
+  }
+  if (!pool.length) return { replicate: [], remove: [], pool: 0, minSends: 0 };
+
+  // Umbral de confianza: preferimos >=10 envios; si hay pocos, relajamos a >=5.
+  const minSends = pool.filter((m) => m.sends >= 10).length >= 3 ? 10 : 5;
+  const cand = pool.filter((m) => m.sends >= minSends);
+  if (!cand.length) return { replicate: [], remove: [], pool: pool.length, minSends };
+
+  const score = (m: any) => m.ltRate * 2 + m.replyRate - m.dndRate * 2;
+  const maxLt = Math.max(...cand.map((m) => m.ltRate));
+  const maxReply = Math.max(...cand.map((m) => m.replyRate));
+  const dndSorted = cand.map((m) => m.dndRate).sort((a, b) => a - b);
+  const medDnd = dndSorted[Math.floor(dndSorted.length / 2)] || 0;
+
+  const pack = (m: any, reason: string) => ({
+    seq: m.seq, pos: m.pos, text: insOneLine(m.tmpl), sends: m.sends,
+    replyRate: m.replyRate, ltRate: m.ltRate, dndRate: m.dndRate, reason,
+  });
+  const replicReason = (m: any) => {
+    const b: string[] = [];
+    if (m.ltRate > 0 && m.ltRate === maxLt) b.push("best live-transfer rate (" + m.ltRate + "%)");
+    else if (m.ltRate > 0) b.push("converts to LT (" + m.ltRate + "%)");
+    if (m.replyRate === maxReply) b.push("top response rate (" + m.replyRate + "%)");
+    else if (m.replyRate >= 8) b.push("strong replies (" + m.replyRate + "%)");
+    b.push("low opt-out (" + m.dndRate + "%)");
+    return b.join(" · ");
+  };
+  const removeReason = (m: any) =>
+    m.dndRate >= 5
+      ? "high opt-out (" + m.dndRate + "%) — burning the list"
+      : "near-zero conversion (LT " + m.ltRate + "%, replies " + m.replyRate + "%) over " + m.sends + " sends";
+
+  const replicate = cand.slice()
+    .sort((a, b) => score(b) - score(a))
+    .filter((m) => (m.ltRate > 0 || m.replyRate >= 8) && m.dndRate <= Math.max(medDnd, 3))
+    .slice(0, 3).map((m) => pack(m, replicReason(m)));
+
+  const chosen = new Set(replicate.map((r) => r.seq + "#" + r.pos));
+  const remove = cand.slice()
+    .sort((a, b) => (b.dndRate - a.dndRate) || (score(a) - score(b)))
+    .filter((m) => (m.dndRate >= 5 || (m.ltRate === 0 && m.replyRate < 5)) && !chosen.has(m.seq + "#" + m.pos))
+    .slice(0, 3).map((m) => pack(m, removeReason(m)));
+
+  return { replicate, remove, pool: pool.length, minSends };
+}
+
 async function build() {
   return await withDb(async (c) => {
     const out: any = { generatedAt: new Date().toISOString(), windows: {} };
@@ -482,6 +540,7 @@ async function build() {
         unidentified: byWf["none"] || { ing: 0, lt: 0 },
         msgs: msgsByWf,
       };
+      out.windows[win].insights = computeInsights(out.windows[win]);
     }
     await c.queryArray(`insert into sms_analytics.snapshots_v2(data) values ($1::jsonb)`, [JSON.stringify(out)]);
     await c.queryObject(`update sms_analytics.run set finished_at=now(), note='built' where id=1`);
@@ -523,6 +582,15 @@ function perfMd(snap: any, win: string): string {
   for (const s of seqs) md += "| " + s.key + " | " + s.label + " | " + (s.ing == null ? "-" : s.ing) + " | " + (s.lt == null ? "-" : s.lt) + " | " + (s.cr == null ? "-" : s.cr + "%") + " |\n";
   const u = w.unidentified || { ing: 0, lt: 0 };
   md += "\nnote: outside these 3 sequences = " + u.ing + " contacts / " + u.lt + " LT (other workflows or manual sends).\n\n";
+  const ins = w.insights;
+  if (ins && ((ins.replicate || []).length || (ins.remove || []).length)) {
+    md += "## perf.insights [item: what-to-replicate-and-kill] (min " + ins.minSends + " sends)\n";
+    md += "replicate — model new copy on these winning structures:\n";
+    for (const r of (ins.replicate || [])) md += "  - [" + r.seq + " sms#" + r.pos + "] \"" + r.text + "\" -> " + r.reason + "\n";
+    md += "remove — retire these, do NOT reuse:\n";
+    for (const r of (ins.remove || [])) md += "  - [" + r.seq + " sms#" + r.pos + "] \"" + r.text + "\" -> " + r.reason + "\n";
+    md += "copy_signal: replicate the hook/structure of the 'replicate' set; never reuse the 'remove' set.\n\n";
+  }
   for (const s of (w.sequences || [])) {
     const rows = ((w.msgs || {})[s.key] || []).slice().sort((a: any, b: any) => a.pos - b.pos);
     md += "## perf.messages." + s.key + " [item: message-set] — " + s.label + "\n";
@@ -696,24 +764,98 @@ async function generate(cfg: Record<string, string>, body: any) {
   const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
   let parsed: any = null;
   try { parsed = JSON.parse(text.replace(/^```(json)?\s*/i, "").replace(/\s*```$/i, "").trim()); } catch (_) { /* keep raw */ }
-  let checked = 0, flagged = 0;
-  if (parsed && Array.isArray(parsed.variants)) {
+  let checked = 0, flagged = 0, repaired = false;
+  const rescan = () => {
+    checked = 0; flagged = 0;
+    if (!parsed || !Array.isArray(parsed.variants)) return;
     for (const v of parsed.variants) for (const m of (v.messages || [])) {
       if (m && typeof m.text === "string") {
         const chk = checkCompliance(m.text);
-        m.text = chk.text;              // opt-out language ya removido
-        m.chars = chk.text.length;
-        m.compliant = chk.ok;
-        m.violations = chk.violations;
+        m.text = chk.text; m.chars = chk.text.length; m.compliant = chk.ok; m.violations = chk.violations;
         checked++; if (!chk.ok) flagged++;
       }
     }
+  };
+  rescan();
+
+  // Auto-reparacion: si algo no cumple, pedimos reescribir SOLO esos (1 pasada acotada) y re-validamos.
+  if (parsed && flagged > 0) {
+    const bad: any[] = [];
+    parsed.variants.forEach((v: any, vi: number) => (v.messages || []).forEach((m: any, mi: number) => {
+      if (m && m.violations && m.violations.length) bad.push({ vi, mi, text: m.text, fix: m.violations });
+    }));
+    const rsys = "You rewrite outbound SMS so they pass hardcoded compliance rules. Keep the SAME intent and any {merge_tokens}. Rules: <=150 chars; NO opt-out/STOP/HELP/'msg&data' text; plain ASCII only; no ALL-CAPS words; at most one ! or ? total; and NEVER use these banned words in any form: " +
+      COMPLIANCE_BANNED + ". Prefer: " + COMPLIANCE_SUBS + ". Respond with ONLY a JSON array echoing vi/mi: [{\"vi\":0,\"mi\":0,\"text\":\"...\"}].";
+    try {
+      const rr = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model, max_tokens: 2000, temperature: 0.4, system: rsys, messages: [{ role: "user", content: "Rewrite each to fix its violations:\n" + JSON.stringify(bad) }] }),
+      });
+      if (rr.ok) {
+        const rj = await rr.json();
+        const rtext = (rj.content || []).map((b: any) => b.text || "").join("").trim();
+        let fixes: any = null;
+        try { fixes = JSON.parse(rtext.replace(/^```(json)?\s*/i, "").replace(/\s*```$/i, "").trim()); } catch (_) { /* skip */ }
+        if (Array.isArray(fixes)) {
+          for (const f of fixes) {
+            const m = parsed.variants[f.vi] && parsed.variants[f.vi].messages && parsed.variants[f.vi].messages[f.mi];
+            if (m && typeof f.text === "string") {
+              const chk = checkCompliance(f.text);
+              if (chk.violations.length < (m.violations || []).length) { m.text = f.text; repaired = true; } // solo si mejora
+            }
+          }
+          if (repaired) rescan();
+        }
+      }
+    } catch (_) { /* nos quedamos con la 1a pasada */ }
   }
+
   return { ok: true, model, elapsedMs: Date.now() - t0,
     brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win },
-    compliance: { checked, flagged, maxChars: SMS_MAX_CHARS,
+    compliance: { checked, flagged, repaired, maxChars: SMS_MAX_CHARS,
       note: "Las reglas de palabras/formato se aplican aca, pero el outbound frio de MCA/debt-restructuring es una categoria que T-Mobile/Twilio/TCR prohiben formalmente: la entregabilidad depende de la reputacion del numero, el consentimiento y la rotacion, no solo del copy." },
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
+}
+
+// ---- INSIGHTS con IA: lectura masticada de los mejores/peores (on-demand) -----
+// Toma los insights deterministas del snapshot y pide a la IA un resumen accionable.
+async function insightAi(cfg: Record<string, string>, win: string) {
+  const akey = cfg.anthropic_api_key;
+  if (!akey) return { error: "Falta 'anthropic_api_key' en sms_analytics.config." };
+  const model = cfg.gen_model || "claude-sonnet-5";
+  const snap = await withDb(async (c) => {
+    const q = await c.queryObject<{ data: any }>("select data from sms_analytics.snapshots_v2 order by id desc limit 1");
+    return q.rows[0] ? q.rows[0].data : null;
+  });
+  const w = snap && snap.windows && snap.windows[win];
+  const ins = w && w.insights;
+  if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length)))
+    return { error: "No hay insights todavia — corre un build con datos primero." };
+  const sys = [
+    "You are a sharp growth analyst for outbound SMS in MCA debt-restructuring.",
+    "You get the BEST and WORST performing messages (with response, live-transfer and opt-out rates).",
+    "Write a SHORT digested read (max 110 words, plain text, no preamble, no markdown headers):",
+    "1) The 1-2 structural patterns that make the winners convert — phrased as reusable rules to copy.",
+    "2) What to kill and exactly why (name the metric that condemns it).",
+    "Be concrete and punchy. Reference the sms# and sequence. Do not just restate the raw numbers.",
+  ].join("\n");
+  const user = "WINDOW: " + win + "d\n\nREPLICATE (winners):\n" + JSON.stringify(ins.replicate) +
+    "\n\nREMOVE (losers):\n" + JSON.stringify(ins.remove);
+  const t0 = Date.now();
+  let r: Response;
+  try {
+    r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: 600, temperature: 0.5, system: sys, messages: [{ role: "user", content: user }] }),
+    });
+  } catch (e) { return { error: "fetch a Anthropic fallo: " + String(e) }; }
+  if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 300) };
+  const j = await r.json();
+  const narrative = (j.content || []).map((b: any) => b.text || "").join("").trim();
+  return { ok: true, win, model, elapsedMs: Date.now() - t0, narrative,
+    counts: { replicate: (ins.replicate || []).length, remove: (ins.remove || []).length } };
 }
 
 Deno.serve(async (req) => {
@@ -738,6 +880,7 @@ Deno.serve(async (req) => {
       const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
       return json(await generate(cfg, body));
     }
+    if (action === "insight_ai") return json(await insightAi(cfg, url.searchParams.get("win") || "30"));
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
@@ -755,6 +898,6 @@ Deno.serve(async (req) => {
       });
       return json(r ? { ...r.data, snapshotAt: r.created_at } : { empty: true });
     }
-    return json({ error: "acciones: seed | refresh | markwon | context | generate | work | build | status | data" }, 400);
+    return json({ error: "acciones: seed | refresh | markwon | context | generate | insight_ai | work | build | status | data" }, 400);
   } catch (e) { return json({ error: String(e) }, 500); }
 });
