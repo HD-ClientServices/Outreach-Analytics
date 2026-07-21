@@ -868,7 +868,13 @@ Deno.serve(async (req) => {
 
   let cfg: Record<string, string>;
   try { cfg = await getConfig(); } catch (e) { return json({ error: "db/config: " + String(e) }, 500); }
-  if (token !== cfg.dash_token) return json({ error: "unauthorized" }, 401);
+
+  // AUTH: leer es abierto (el link de Netlify es la credencial privada; ver no gasta nada).
+  // Las acciones que MUTAN la base o gastan API (GHL/Anthropic) exigen la clave de operador
+  // (cfg.dash_token). El dashboard la pide aparte y la manda por ?token= solo en esas llamadas;
+  // nunca vive en la URL de la pagina. Los crons ya mandan el token, siguen andando igual.
+  const OPERATOR = new Set(["seed", "refresh", "markwon", "work", "build", "generate", "insight_ai"]);
+  if (OPERATOR.has(action || "") && token !== cfg.dash_token) return json({ error: "operator_key_required" }, 401);
 
   try {
     if (action === "seed") return json(await seed(cfg));

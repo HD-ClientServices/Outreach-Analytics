@@ -308,7 +308,16 @@ tbody tr:hover{background:var(--surface)}
 </div>
 <script>
 var EP="https://voivhkugeepawdxoubgx.supabase.co/functions/v1/outreach-analytics";
-var TOKEN=new URLSearchParams(location.search).get("token")||"";
+// El link ya NO lleva token: ver (data/status/context) es abierto. Solo las acciones que gastan
+// API (refresh/generate/insight_ai) piden una clave de operador, una vez por sesion; queda en
+// sessionStorage y viaja solo en esas llamadas, nunca en la URL de la pagina.
+function opKey(){
+  var k=sessionStorage.getItem("oa_opkey")||"";
+  if(!k){ k=(prompt("Clave de operador (solo para refrescar datos o generar con IA):")||"").trim(); if(k) sessionStorage.setItem("oa_opkey",k); }
+  return k;
+}
+function opParam(){ return "&token="+encodeURIComponent(opKey()); }
+function opFail(d){ if(d&&d.error==="operator_key_required"){ sessionStorage.removeItem("oa_opkey"); alert("Clave de operador incorrecta. Probá de nuevo."); return true; } return false; }
 var DATA=null;
 var ORDER=["cc","cold","defdec"];
 var ST={win:30, tab:"cc", sort:"pos", metric:"reply"};
@@ -333,10 +342,11 @@ function genRun(){
   };
   btn.disabled=true; btn.textContent="Generating…";
   out.innerHTML='<div class="sub" style="margin-top:24px"><span class="spin"></span>The AI is writing the sequences…</div>';
-  fetch(EP+"?action=generate&token="+encodeURIComponent(TOKEN),{
+  fetch(EP+"?action=generate"+opParam(),{
     method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({brief:brief})
   }).then(function(r){return r.json()}).then(function(d){
     btn.disabled=false; btn.textContent="Generate sequences";
+    if(opFail(d)){ out.innerHTML=''; return; }
     if(d.error){ out.innerHTML='<div class="gen-err"><b>Error:</b> '+esc(d.error)+'</div>'; return; }
     genRender(d);
   }).catch(function(e){
@@ -419,10 +429,11 @@ function aiRead(){
   var b=document.getElementById('aiReadBtn'), out=document.getElementById('aiReadOut');
   if(!b||!out) return;
   b.textContent='Reading…'; b.style.pointerEvents='none';
-  fetch(EP+"?action=insight_ai&win="+ST.win+"&token="+encodeURIComponent(TOKEN))
+  fetch(EP+"?action=insight_ai&win="+ST.win+opParam())
     .then(function(r){return r.json()})
     .then(function(d){
       b.textContent='✨ AI read'; b.style.pointerEvents='';
+      if(opFail(d)){ out.innerHTML=''; return; }
       if(d.error){ out.innerHTML='<span class="nd">'+esc(d.error)+'</span>'; return; }
       var html='<div class="note" style="white-space:pre-wrap;line-height:1.55">'+esc(d.narrative||'')+'</div>';
       AI_READ_CACHE[ST.win]=html; out.innerHTML=html;
@@ -494,10 +505,10 @@ function t2(){
   }).join("")||'<tr><td colspan="9" class="nd" style="padding:20px">No messages with 5+ sends in this window.</td></tr>';
 }
 function loadData(){
-  return fetch(EP+"?action=data&token="+encodeURIComponent(TOKEN))
+  return fetch(EP+"?action=data")
     .then(function(r){return r.json()})
     .then(function(d){
-      if(d.error){document.getElementById("app").innerHTML='<div class="note">Unauthorized. Check the token in the link.</div>';return}
+      if(d.error){document.getElementById("app").innerHTML='<div class="note">Error al cargar los datos. Reintentá en un momento.</div>';return}
       if(d.empty){if(!DATA)document.getElementById("app").innerHTML='<div class="note">No data yet: the extraction hasn\'t finished.</div>';return}
       DATA=d;try{localStorage.setItem("oa_data",JSON.stringify(d))}catch(e){}render();
     })
@@ -508,15 +519,21 @@ try{var _c=localStorage.getItem("oa_data");if(_c){DATA=JSON.parse(_c);render();}
 loadData();
 
 // Boton de refresh: dispara la actualizacion on-demand y muestra el progreso hasta reconstruir.
-var _pollT=null;
+var _pollT=null, _refOK=false;
 function startRefresh(){
   var b=document.getElementById("refreshBtn");if(!b)return;
   var t0=Date.now();
+  var k=opKey();
+  if(!k){ b.classList.remove("on");b.style.pointerEvents="";b.textContent="↻ Refresh"; return; }
   b.classList.add("on");b.textContent="Refreshing…";b.style.pointerEvents="none";
-  fetch(EP+"?action=refresh&token="+encodeURIComponent(TOKEN)).then(function(r){return r.json()}).catch(function(){});
+  _refOK=true;
+  fetch(EP+"?action=refresh&token="+encodeURIComponent(k)).then(function(r){return r.json()}).then(function(d){
+    if(opFail(d)){ _refOK=false; clearTimeout(_pollT); b.classList.remove("on");b.style.pointerEvents="";b.textContent="↻ Refresh"; }
+  }).catch(function(){});
   clearTimeout(_pollT);
   (function poll(){
-    fetch(EP+"?action=status&token="+encodeURIComponent(TOKEN)).then(function(r){return r.json()}).then(function(st){
+    if(!_refOK) return;
+    fetch(EP+"?action=status").then(function(r){return r.json()}).then(function(st){
       var b=document.getElementById("refreshBtn");if(!b)return;
       var built=st.note==="built"&&st.finished_at&&new Date(st.finished_at).getTime()>t0-3000;
       if(built){
