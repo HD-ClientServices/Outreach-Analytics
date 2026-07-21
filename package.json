@@ -1,0 +1,12 @@
+{
+  "name": "outreach-analytics-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static host for the Outreach Analytics dashboard (served on Railway). The data API lives in the Supabase edge function.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
