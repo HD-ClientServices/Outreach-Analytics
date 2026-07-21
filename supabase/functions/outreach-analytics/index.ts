@@ -91,6 +91,17 @@ for (const k of Object.keys(OFFICIAL)) {
   }
 }
 
+// Posición canónica de cada mensaje oficial de Defaults & Declined (numeración
+// del workflow 1-15; el #6 "{nombre}?" está filtrado), indexada por su posición
+// en OFFICIAL.defdec. Se usa para etiquetar las ramas (1A/1B/…) consistente entre
+// ramas — NO el pos de envío crudo, que se desalinea entre Default y Declined.
+const DEFDEC_POS_BY_IDX = [1, 1, 2, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const DEFDEC_POS: Record<string, number> = {};
+(OFFICIAL.defdec || []).forEach((m, i) => {
+  const sk = skel(m);
+  if (sk.length >= 4 && DEFDEC_POS_BY_IDX[i] != null) DEFDEC_POS[sk] = DEFDEC_POS_BY_IDX[i];
+});
+
 function dbClient() { return new Client(Deno.env.get("SUPABASE_DB_URL")!); }
 async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const c = dbClient(); await c.connect();
@@ -539,11 +550,12 @@ async function build() {
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
         if (!text) continue;
         const br = r.br || "-";
+        const canonPos = r.wf === "defdec" ? DEFDEC_POS[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const gk = sk + "¦" + br;
-        const e = g[gk] || (g[gk] = { tmpl: text, pos: r.pos, branch: br, sends: 0, replies: 0, lts: 0, dnds: 0 });
+        const e = g[gk] || (g[gk] = { tmpl: text, pos: (canonPos != null ? canonPos : r.pos), branch: br, canon: canonPos != null, sends: 0, replies: 0, lts: 0, dnds: 0 });
         e.sends += Number(r.sends); e.replies += Number(r.replies); e.lts += Number(r.lts); e.dnds += Number(r.dnds);
-        if (r.pos < e.pos) e.pos = r.pos;
+        if (!e.canon && r.pos < e.pos) e.pos = r.pos;
       }
       const msgsByWf: Record<string, any[]> = {};
       for (const wf of Object.keys(agg)) {
