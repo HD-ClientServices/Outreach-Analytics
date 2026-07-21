@@ -370,7 +370,7 @@ function genRender(d){
       var viol=(m.violations&&m.violations.length)?m.violations:(m.compliant===false?["flagged"]:[]);
       H+='<div class="gen-msg"><div class="idx">#'+(m.n!=null?m.n:"")+(m.day!=null?'<span class="day">day '+m.day+'</span>':'')+'</div>'
         +'<div><div class="gen-txt">'+esc(m.text||"")+'</div><div class="gen-meta">'
-        +'<span class="gen-chars'+(chars>150?' over':'')+'">'+chars+'/150 chars</span>'
+        +'<span class="gen-chars'+(chars>150?' over':'')+'" title="as delivered — merge fields count as the value they fill in, not their literal length">'+chars+'/150 chars</span>'
         +(viol.length?'<span class="gen-chars over" title="'+esc(viol.join(" · "))+'">⚠ '+viol.length+' compliance</span>':'<span class="gen-chars" style="color:#16a34a">✓ compliant</span>')
         +(m.why?'<span class="gen-why">'+esc(m.why)+'</span>':'')
         +'<span class="gen-copy" onclick="genCopy(this)">copy</span>'
