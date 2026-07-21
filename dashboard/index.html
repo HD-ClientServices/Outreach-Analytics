@@ -409,7 +409,7 @@ function render(){
   H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate</div>'
    + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
    + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
-  H+='<div class="sec"><h2>Messages</h2><div class="h">Sends, responses, live transfers and opt-outs (DND) per message — with their rates. Only messages with 5+ sends.</div>'
+  H+='<div class="sec"><h2>Messages</h2><div class="h">Sends, responses, live transfers and opt-outs (DND) per message — with their rates. Only messages with 5+ sends. In <b>Defaults &amp; Declined</b> the SMS&nbsp;# includes the branch: <b>A</b> = Default · <b>B</b> = Declined (e.g. 1A, 5B).</div>'
    + '<div class="controls" style="margin-bottom:14px"><div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div></div>'
    + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Sequence</span><div class="grp" id="tabs"></div></div></div>'
    + '<div class="card"><div style="overflow-x:auto"><table><thead><tr>'
@@ -454,7 +454,7 @@ function insightsView(){
     items.forEach(function(m){
       h+='<div style="padding:10px 0;border-top:1px solid var(--line,rgba(0,0,0,.08))">'
         +'<div style="margin-bottom:4px">'+esc(m.text)+'</div>'
-        +'<div style="font-family:var(--font-mono,monospace);font-size:11px;color:var(--muted-2,#9a9a9a)">'+esc(m.seq)+' · #'+m.pos+' — resp '+m.replyRate+'% · LT '+m.ltRate+'% · opt-out '+m.dndRate+'% · '+m.sends+' sent</div>'
+        +'<div style="font-family:var(--font-mono,monospace);font-size:11px;color:var(--muted-2,#9a9a9a)">'+esc(m.seq)+' · #'+m.pos+((m.branch&&m.branch!='-')?m.branch:'')+' — resp '+m.replyRate+'% · LT '+m.ltRate+'% · opt-out '+m.dndRate+'% · '+m.sends+' sent</div>'
         +'<div style="font-size:12px;margin-top:3px;color:'+c+'">'+esc(m.reason)+'</div></div>';
     });
     return h+'</div>';
@@ -487,12 +487,13 @@ function pills(){
 }
 function t2(){
   var w=W(), rows=((w.msgs||{})[ST.tab]||[]).slice();
-  if(ST.sort=="pos") rows.sort(function(a,b){return a.pos-b.pos});
+  if(ST.sort=="pos") rows.sort(function(a,b){return (a.pos-b.pos)||(a.branch||'').localeCompare(b.branch||'')});
   else if(ST.sort=="reply") rows.sort(function(a,b){return b.replyRate-a.replyRate});
   else if(ST.sort=="lt") rows.sort(function(a,b){return b.ltRate-a.ltRate});
   else rows.sort(function(a,b){return b.dndRate-a.dndRate});
   document.getElementById("t2").innerHTML=rows.map(function(m){
-    return '<tr><td class="num"><span class="pos">'+m.pos+'</span></td>'
+    var lbl=m.pos+((m.branch&&m.branch!='-')?m.branch:'');
+    return '<tr><td class="num"><span class="pos">'+lbl+'</span></td>'
       +'<td><div class="frase">'+esc(m.tmpl)+'</div></td>'
       +'<td class="num">'+nf(m.sends)+'</td>'
       +'<td class="num">'+nf(m.replies)+'</td>'

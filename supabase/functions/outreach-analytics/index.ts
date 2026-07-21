@@ -459,7 +459,7 @@ function computeInsights(win: any): any {
   const medDnd = dndSorted[Math.floor(dndSorted.length / 2)] || 0;
 
   const pack = (m: any, reason: string) => ({
-    seq: m.seq, pos: m.pos, text: insOneLine(m.tmpl), sends: m.sends,
+    seq: m.seq, pos: m.pos, branch: m.branch, text: insOneLine(m.tmpl), sends: m.sends,
     replyRate: m.replyRate, ltRate: m.ltRate, dndRate: m.dndRate, reason,
   });
   const replicReason = (m: any) => {
@@ -481,10 +481,10 @@ function computeInsights(win: any): any {
     .filter((m) => (m.ltRate > 0 || m.replyRate >= 8) && m.dndRate <= Math.max(medDnd, 3))
     .slice(0, 3).map((m) => pack(m, replicReason(m)));
 
-  const chosen = new Set(replicate.map((r) => r.seq + "#" + r.pos));
+  const chosen = new Set(replicate.map((r) => r.seq + "#" + r.pos + (r.branch || "")));
   const remove = cand.slice()
     .sort((a, b) => (b.dndRate - a.dndRate) || (score(a) - score(b)))
-    .filter((m) => (m.dndRate >= 5 || (m.ltRate === 0 && m.replyRate < 5)) && !chosen.has(m.seq + "#" + m.pos))
+    .filter((m) => (m.dndRate >= 5 || (m.ltRate === 0 && m.replyRate < 5)) && !chosen.has(m.seq + "#" + m.pos + (m.branch || "")))
     .slice(0, 3).map((m) => pack(m, removeReason(m)));
 
   return { replicate, remove, pool: pool.length, minSends };
@@ -502,8 +502,26 @@ async function build() {
       const byWf: Record<string, { ing: number; lt: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
 
-      const msgs = await c.queryObject<{ wf: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
-        `select e.wf, t.tmpl, min(e.pos)::int as pos,
+      // Rama por contacto (solo defdec): A=Default / B=Declined, según su 1er SMS.
+      // El resto de las secuencias no se dividen (br='-'). Ver artifact de ramas.
+      const msgs = await c.queryObject<{ wf: string; br: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
+        `with firstmsg as (
+           select distinct on (e.contact_id) e.contact_id, t.tmpl
+           from sms_analytics.msg_events e
+           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+           order by e.contact_id, e.pos asc, e.sent_at asc
+         ),
+         cbr as (
+           select c.contact_id,
+             case when c.wf <> 'defdec' then '-'
+                  when fm.tmpl ~* 'default situation' then 'A'
+                  when fm.tmpl ~* 'qualify for an mca'  then 'B'
+                  else '-' end as br
+           from sms_analytics.cohort c
+           left join firstmsg fm on fm.contact_id = c.contact_id
+           where c.entered_at >= now() - ($1 || ' days')::interval
+         )
+         select e.wf, cbr.br, t.tmpl, min(e.pos)::int as pos,
                 count(*)::bigint as sends,
                 count(*) filter (where e.got_reply)::bigint as replies,
                 count(*) filter (where e.led_to_lt and c.won)::bigint as lts,
@@ -511,23 +529,26 @@ async function build() {
          from sms_analytics.msg_events e
          join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
          join sms_analytics.cohort c on c.contact_id = e.contact_id
+         join cbr on cbr.contact_id = e.contact_id
          where c.entered_at >= now() - ($1 || ' days')::interval
-         group by e.wf, t.tmpl`, [String(win)]);
+         group by e.wf, cbr.br, t.tmpl`, [String(win)]);
 
       const agg: Record<string, Record<string, any>> = {};
       for (const r of msgs.rows) {
         const sk = skel(r.tmpl);
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
         if (!text) continue;
+        const br = r.br || "-";
         const g = (agg[r.wf] || (agg[r.wf] = {}));
-        const e = g[sk] || (g[sk] = { tmpl: text, pos: r.pos, sends: 0, replies: 0, lts: 0, dnds: 0 });
+        const gk = sk + "¦" + br;
+        const e = g[gk] || (g[gk] = { tmpl: text, pos: r.pos, branch: br, sends: 0, replies: 0, lts: 0, dnds: 0 });
         e.sends += Number(r.sends); e.replies += Number(r.replies); e.lts += Number(r.lts); e.dnds += Number(r.dnds);
         if (r.pos < e.pos) e.pos = r.pos;
       }
       const msgsByWf: Record<string, any[]> = {};
       for (const wf of Object.keys(agg)) {
         msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) => e.sends >= 5).map((e: any) => ({
-          tmpl: e.tmpl, pos: e.pos, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
+          tmpl: e.tmpl, pos: e.pos, branch: e.branch, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
           replyRate: e.sends ? Math.round(1000 * e.replies / e.sends) / 10 : 0,
           ltRate: e.sends ? Math.round(10000 * e.lts / e.sends) / 100 : 0,
           dndRate: e.sends ? Math.round(1000 * e.dnds / e.sends) / 10 : 0,
