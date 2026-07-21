@@ -3,6 +3,8 @@ import { Client } from "https://deno.land/x/postgres@v0.19.3/mod.ts";
 const BASE = "https://services.leadconnectorhq.com";
 const VER = "2021-07-28";
 const WINDOW_DAYS = 30;
+// LLM HARDCODEADO a Sonnet 5 para TODA generación con IA (secuencias + AI read de insights + futura persona). Sin override por config.
+const GEN_MODEL = "claude-sonnet-5";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---- Las 3 secuencias -------------------------------------------------------
@@ -708,7 +710,7 @@ function checkCompliance(raw: string): { text: string; ok: boolean; violations: 
 async function generate(cfg: Record<string, string>, body: any) {
   const akey = (cfg.anthropic_api_key || "").trim();
   if (!akey) return { error: "Falta 'anthropic_api_key' en la tabla sms_analytics.config. Agregala en el Table Editor de Supabase y reintenta." };
-  const model = cfg.gen_model || "claude-sonnet-5";
+  const model = GEN_MODEL;
   const brief = (body && body.brief) || {};
   const win = String(brief.win || "30");
   const nMsgs = Math.min(Math.max(parseInt(brief.messages) || 6, 3), 12);
@@ -823,7 +825,7 @@ async function generate(cfg: Record<string, string>, body: any) {
 async function insightAi(cfg: Record<string, string>, win: string) {
   const akey = (cfg.anthropic_api_key || "").trim();
   if (!akey) return { error: "Falta 'anthropic_api_key' en sms_analytics.config." };
-  const model = cfg.gen_model || "claude-sonnet-5";
+  const model = GEN_MODEL;
   const snap = await withDb(async (c) => {
     const q = await c.queryObject<{ data: any }>("select data from sms_analytics.snapshots_v2 order by id desc limit 1");
     return q.rows[0] ? q.rows[0].data : null;
