@@ -361,7 +361,7 @@ function genRender(d){
   }
   var H='<div class="sub gen-note">'+res.variants.length+' variant(s) · model '+esc(d.model||"")+' · '+Math.round((d.elapsedMs||0)/1000)+'s'+(d.usage&&d.usage.output_tokens?(' · '+d.usage.output_tokens+' tokens'):'')+'</div>';
   if(d.compliance){var cf=d.compliance.flagged||0,cc=d.compliance.checked||0;
-    H+='<div class="gen-note" style="margin-bottom:8px;color:'+(cf?'var(--danger)':'#16a34a')+'">'+(cf?('⚠ '+cf+' of '+cc+' messages tripped a hardcoded rule — see the flags below'):('✓ all '+cc+' messages pass the hardcoded rules (≤150 chars · no banned words · no opt-out)'))+'</div>';
+    H+='<div class="gen-note" style="margin-bottom:8px;color:'+(cf?'var(--danger)':'#16a34a')+'">'+(cf?('⚠ '+cf+' of '+cc+' messages tripped a hardcoded rule — see the flags below'):('✓ all '+cc+' messages pass the hardcoded rules (≤150 chars as delivered · no banned words · no opt-out · only {{contact.first_name}} + {{user.name}})'))+'</div>';
     if(d.compliance.note) H+='<div class="sub" style="margin-bottom:14px;font-size:11px;opacity:.7">'+esc(d.compliance.note)+'</div>';}
   res.variants.forEach(function(v){
     H+='<div class="gen-var"><div class="gen-vhead"><div class="nm">'+esc(v.name||"Variant")+'</div>'+(v.angle?'<div class="ang">'+esc(v.angle)+'</div>':'')+'</div>';

@@ -845,7 +845,7 @@ async function generate(cfg: Record<string, string>, body: any) {
     "Respond with ONLY valid JSON (no markdown fences, no prose) matching the schema in the user message.",
   ].join("\n");
 
-  const schema = '{"variants":[{"name":"short label","angle":"the core hook in one line","messages":[{"n":1,"day":0,"text":"SMS text with merge tokens","why":"one-line rationale citing a data or persona signal"}]}],"notes":"what to A/B test between the variants"}';
+  const schema = '{"variants":[{"name":"short label","angle":"the core hook in one line","messages":[{"n":1,"day":0,"text":"SMS copy using ONLY {{contact.first_name}} and {{user.name}} as variables","why":"one-line rationale citing a data or persona signal"}]}],"notes":"what to A/B test between the variants"}';
 
   const user = "PERFORMANCE DATA:\n" + inputs.perf + "\n\n===\n\nBUYER PERSONA:\n" + inputs.persona + "\n\n===\n\nBRAND VOICE:\n" + inputs.brand +
     "\n\n===\n\nBRIEF:\n- Goal: " + goal + "\n- Audience: " + audience + "\n- Messages per sequence: " + nMsgs + "\n- Variants: " + nVars + "\n- Language: " + lang +
@@ -872,7 +872,7 @@ async function generate(cfg: Record<string, string>, body: any) {
     for (const v of parsed.variants) for (const m of (v.messages || [])) {
       if (m && typeof m.text === "string") {
         const chk = checkCompliance(m.text);
-        m.text = chk.text; m.chars = chk.text.length; m.compliant = chk.ok; m.violations = chk.violations;
+        m.text = chk.text; m.chars = chk.len; m.compliant = chk.ok; m.violations = chk.violations;
         checked++; if (!chk.ok) flagged++;
       }
     }
@@ -885,7 +885,7 @@ async function generate(cfg: Record<string, string>, body: any) {
     parsed.variants.forEach((v: any, vi: number) => (v.messages || []).forEach((m: any, mi: number) => {
       if (m && m.violations && m.violations.length) bad.push({ vi, mi, text: m.text, fix: m.violations });
     }));
-    const rsys = "You rewrite outbound SMS so they pass hardcoded compliance rules. Keep the SAME intent and any {merge_tokens}. Rules: <=150 chars; NO opt-out/STOP/HELP/'msg&data' text; plain ASCII only; no ALL-CAPS words; at most one ! or ? total; and NEVER use these banned words in any form: " +
+    const rsys = "You rewrite outbound SMS so they pass hardcoded compliance rules. Keep the SAME intent. The ONLY variables allowed are {{contact.first_name}} and {{user.name}} — convert or remove any other token (e.g. an amount/{monto} token) and never invent new ones. Rules: <=150 chars as delivered; NO opt-out/STOP/HELP/'msg&data' text; plain ASCII only; no ALL-CAPS words; at most one ! or ? total; and NEVER use these banned words in any form: " +
       COMPLIANCE_BANNED + ". Prefer: " + COMPLIANCE_SUBS + ". Respond with ONLY a JSON array echoing vi/mi: [{\"vi\":0,\"mi\":0,\"text\":\"...\"}].";
     try {
       const rr = await fetch("https://api.anthropic.com/v1/messages", {
