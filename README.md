@@ -47,15 +47,19 @@ muere a los ~150s. Por eso el pipeline es **por lotes**, empujado por cron.
 
 ### Acciones de la edge function
 
-Todas requieren `?token=<dash_token>`.
+Dos niveles de acceso (ver [Seguridad](#seguridad)):
+- **Lectura (abiertas, sin token):** `data`, `status`, `context`. Las consume el dashboard directo.
+- **Operador (exigen `?token=<dash_token>`):** `seed`, `refresh`, `markwon`, `work`, `build`, `generate`, `insight_ai`. Mutan la base o gastan API (GHL/Anthropic).
 
-| Acción | Qué hace |
-|---|---|
-| `?action=seed` | Arma la cohorte desde `opportunities/search` (30d). **Trunca `cohort` y `msg_events`.** |
-| `?action=work&ms=100000` | Procesa una tanda acotada por tiempo. Devuelve `{processed, remaining}`. Al llegar a 0 dispara `build` solo. |
-| `?action=build` | Recalcula las 3 ventanas e inserta en `snapshots_v2`. |
-| `?action=status` | Progreso del backfill. |
-| `?action=data` | Último snapshot. Lo consume el dashboard. |
+| Acción | Nivel | Qué hace |
+|---|---|---|
+| `?action=seed` | operador | Arma la cohorte desde `opportunities/search` (30d). **Trunca `cohort` y `msg_events`.** |
+| `?action=work&ms=100000` | operador | Procesa una tanda acotada por tiempo. Devuelve `{processed, remaining}`. Al llegar a 0 dispara `build` solo. |
+| `?action=build` | operador | Recalcula las 3 ventanas e inserta en `snapshots_v2`. |
+| `?action=refresh` | operador | Actualización incremental on-demand. |
+| `?action=generate` / `insight_ai` | operador | Llaman a la API de Anthropic (**gastan plata**). |
+| `?action=status` | lectura | Progreso del backfill. |
+| `?action=data` | lectura | Último snapshot. Lo consume el dashboard. |
 
 ### Correr un backfill de cero
 
@@ -169,7 +173,18 @@ Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
 
 ## Seguridad
 
-- Token de GHL **read-only**, en `sms_analytics.config`. Nunca en el código ni en el repo.
-- `dash_token` va en la URL del dashboard y **habilita también `refresh`, `seed` y `work`**.
-  Quien tenga el link puede disparar extracciones. Para compartir afuera conviene un token
-  de solo lectura separado.
+Modelo de acceso (rediseñado 21/07/2026 — el token salió de la URL del dashboard):
+
+- **Ver el dashboard es abierto.** El link `outreach-analytics.netlify.app` (sin `?token=`)
+  carga métricas, persona e insights. La "privacidad" es el link mismo: quien lo tenga, entra.
+  Corolario honesto: las acciones de **lectura** (`data`/`status`/`context`) son accesibles por
+  cualquiera que conozca la URL (Netlify **o** la de la edge function). CORS = `*`. No hay login.
+- **Las acciones de operador** (`refresh`/`seed`/`generate`/`insight_ai`/`work`/`build`/`markwon`)
+  exigen `cfg.dash_token`. El dashboard lo **pide una vez por sesión** (prompt → `sessionStorage`)
+  y lo manda por `?token=` **solo** en esas llamadas — nunca vive en la URL de la página ni en el
+  JS servido. Así, quien encuentre el link puede mirar pero no puede quemar la cuota de API.
+- Los **crons** mandan el `dash_token` server-side (`net.http_post`), siguen funcionando igual.
+- Token de GHL y key de Anthropic **read-only/secretas**, en `sms_analytics.config`.
+  Nunca en el código ni en el repo. Ningún endpoint las devuelve al cliente.
+- Si el link se filtra: rotar `cfg.dash_token` (corta a los operadores) y/o mover el sitio a un
+  subdominio nuevo. Para privacidad real haría falta un login (no implementado, fue decisión).

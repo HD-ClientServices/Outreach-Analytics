@@ -634,32 +634,91 @@ async function context(win: string): Promise<string> {
 const SMS_MAX_CHARS = 150; // solo el cuerpo; el cliente agrega el opt-out aparte, downstream
 
 // Lista negra dura — nunca permitido, en ninguna forma (case-insensitive, word-boundary).
+// Investigación de compliance (frameworks aplicables al outbound SMS de MCA/debt en EE.UU.):
+//   · CTIA Messaging Principles & Best Practices  · TCR (The Campaign Registry) prohibited content
+//   · T-Mobile Code of Conduct / A2P 10DLC  · Twilio Messaging Policy (SHAFT + high-risk finance)
+//   · FTC Telemarketing Sales Rule / debt-relief & credit-repair rules  · CFPB UDAAP.
+// Debt-relief / lending es una categoría EXPLÍCITAMENTE restringida por los carriers: términos como
+// "lender/loan/debt/consolidation/settlement/guaranteed" disparan filtrado. Word-boundary => "settle"
+// NO matchea "Settlegroup", y no baneamos vocabulario válido (advance, funding, restructure, relief,
+// cash flow, default, pre-qualify, lower, options). Cada término se valida en código (no es opcional).
 const BLOCKLIST: string[] = [
-  "debt", "debts", "loan", "loans", "lending",
-  "consolidate", "consolidation", "debt consolidation",
-  "settle", "settlement", "debt settlement",
-  "forgiveness", "debt forgiveness", "debt relief", "debt reduction",
-  "credit repair", "bad credit", "no credit check",
-  "pre-approved", "preapproved", "pre approved",
-  "guaranteed", "guarantee", "free", "risk-free", "risk free", "100% free",
-  "free money", "extra cash", "cash bonus", "fast cash",
-  "eliminate", "wipe out", "get rid of", "erase your debt",
-  "irs", "lawsuit", "legal action", "sue", "garnish", "garnishment", "seize", "arrest",
-  "act now", "urgent", "final notice", "last chance", "apply now",
+  // -- Lending / loan (el bug reportado: "lender") --
+  "lender", "lenders", "lend", "lends", "lending", "lended", "loaner",
+  "loan", "loans", "loaned", "loaning",
+  "borrow", "borrows", "borrowed", "borrowing", "borrower", "borrowers",
+  "creditor", "creditors", "payday", "payday loan", "payday advance",
+  "refinance", "refinancing", "refinanced", "refi",
+  // -- Deuda --
+  "debt", "debts", "debtor", "debtors", "indebted", "indebtedness",
+  // -- Relief / settlement / consolidation / forgiveness --
+  "consolidate", "consolidates", "consolidated", "consolidating", "consolidation", "debt consolidation",
+  "settle", "settles", "settled", "settling", "settlement", "settlements", "debt settlement",
+  "forgive", "forgives", "forgiven", "forgiveness", "debt forgiveness",
+  "debt relief", "debt reduction", "debt elimination", "debt free", "debt-free",
+  "eliminate", "eliminates", "eliminated", "eliminating",
+  "wipe out", "erase your debt", "erase debt", "get out of debt", "get rid of",
+  "write off", "write-off", "charge off", "charge-off",
+  // -- Credit repair / credit score --
+  "credit repair", "repair your credit", "fix your credit", "fix my credit",
+  "bad credit", "poor credit", "low credit", "no credit", "no credit check", "without a credit check",
+  "credit score", "credit scores", "boost your credit", "raise your credit", "credit report",
+  // -- Garantías / promesas absolutas --
+  "guarantee", "guarantees", "guaranteed", "guaranteeing",
+  "pre-approved", "preapproved", "pre approved", "guaranteed approval", "instant approval", "approval guaranteed",
+  "risk-free", "risk free", "no risk", "no-risk", "no obligation", "no strings", "no catch",
+  "promise", "promised",
+  // -- Money-bait / free / cash bait --
+  "free", "100% free", "free money", "free cash", "free consultation", "free quote", "free trial",
+  "fast cash", "quick cash", "easy cash", "extra cash", "cash bonus", "cash now", "instant cash", "get cash",
+  "cash back", "cashback",
+  "bonus", "bonuses", "prize", "prizes", "winner", "you won", "you've won", "congratulations", "congrats",
+  "reward", "rewards", "gift card", "gift cards", "voucher",
+  "discount", "discounts", "special offer", "exclusive offer", "limited offer", "limited-time offer", "best offer",
+  "special deal", "best deal", "unbeatable", "lowest rate", "best rate", "lowest price", "best price",
+  "save big", "save thousands", "save up to", "double your money", "get rich", "wire transfer", "western union",
+  // -- Urgencia / presión --
+  "act now", "act fast", "apply now", "buy now", "order now", "sign up now", "enroll now", "call immediately",
+  "urgent", "urgently", "hurry", "don't wait", "dont wait", "don't miss", "last chance",
+  "final notice", "final warning", "expires", "expiring", "limited time", "limited-time",
+  "time sensitive", "time-sensitive", "while supplies last", "today only", "now or never",
+  "immediate action", "action required",
+  // -- Cobranza / amenaza legal (nunca amenazar en SMS frío) --
+  "lawsuit", "lawsuits", "sue", "sued", "suing", "litigation", "litigate",
+  "legal action", "take legal action", "legal notice", "legal proceedings",
+  "garnish", "garnishment", "garnished", "garnishing", "wage garnishment",
+  "levy", "levied", "bank levy", "seize", "seizure", "seized", "asset seizure",
+  "repossess", "repossession", "repossessed", "foreclose", "foreclosure",
+  "warrant", "subpoena", "summons", "court order", "judgment", "judgement",
+  "arrest", "jail", "prosecute", "prosecution",
+  "collection agency", "collections agency", "debt collector", "debt collectors",
+  "irs", "tax lien", "back taxes",
+  // -- Phishing / clickbait --
+  "click here", "click below", "click the link", "click this link", "tap here",
+  "verify your account", "confirm your identity", "you have been selected", "you've been selected",
+  "dear customer", "dear sir",
+  // -- A2P prohibido universal (SHAFT + verticales restringidos): cinturón y tiradores --
+  "cannabis", "marijuana", "weed", "cbd", "thc", "kratom", "vape", "vaping", "e-cigarette",
+  "tobacco", "cigarette", "cigarettes", "nicotine",
+  "alcohol", "liquor", "vodka", "whiskey", "beer", "wine",
+  "casino", "gambling", "betting", "sportsbook", "lottery", "sweepstakes", "poker", "slots",
+  "firearm", "firearms", "ammo", "ammunition", "handgun", "rifle", "gun",
+  "sex", "sexy", "porn", "escort", "adult content", "xxx", "hookup",
 ];
 
 // Sustituciones seguras para el vertical MCA / restructuring (sesga al modelo).
 const SUBSTITUTIONS: [string, string][] = [
+  ["lender / lenders", "your positions / your current accounts"],
   ["debt", "balances / positions"],
   ["loan", "advance / funding"],
   ["consolidate", "restructure your positions"],
-  ["settle", "resolve / restructure"],
+  ["settle / settlement", "resolve / restructure"],
   ["forgiveness", "lower monthly payments"],
   ["get rid of", "restructure"],
   ["eliminate", "improve cash flow"],
-  ["guaranteed", "you may qualify"],
+  ["guaranteed / pre-approved", "you may qualify / pre-qualify"],
   ["free", "complimentary / no-cost"],
-  ["pre-approved", "you may pre-qualify"],
+  ["lawsuit / legal action", "attorney-led protection"],
 ];
 
 const SHORTENERS = ["bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly", "is.gd", "buff.ly", "rebrand.ly"];
@@ -667,10 +726,42 @@ const SHORTENERS = ["bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly", "is.gd",
 const UCS2_CHARS = /[‐-―‘’“”…•]|[\u{1F000}-\u{1FAFF}]|[☀-➿]|[←-⇿]/u;
 const CAPS_OK = ["SMS", "MCA", "LLC", "USA", "SBA", "UCC", "APR", "US"];
 
+// ---- Variables permitidas (merge tokens de GHL) -----------------------------
+// Por ahora SOLO se permiten estas dos. Cualquier otra variable ({monto}, city,
+// company, etc.) se marca como violación. Los tokens del análisis interno
+// ({nombre}/{opener}/…) se NORMALIZAN a estos antes de validar/mostrar.
+const ALLOWED_TOKENS = ["{{contact.first_name}}", "{{user.name}}"];
+// Largo NOMINAL con el que cuenta cada token al medir el largo "as-delivered"
+// (el token se expande al valor real; contarlo literal sobreestima el segmento).
+const TOKEN_RENDER_LEN: Record<string, number> = { "{{contact.first_name}}": 7, "{{user.name}}": 8 };
+// Alias que el modelo podría emitir -> se reescriben al token correcto de GHL.
+// (el orden importa; "user.name" no se corrompe porque 'name' va precedido de '.').
+const TOKEN_ALIASES: [RegExp, string][] = [
+  [/\{\{?\s*(?:contact\.)?first[_\s]?name\s*\}?\}/gi, "{{contact.first_name}}"],
+  [/\{\{?\s*nombre\s*\}?\}/gi, "{{contact.first_name}}"],
+  [/\{\{?\s*name\s*\}?\}/gi, "{{contact.first_name}}"],
+  [/\{\{?\s*fname\s*\}?\}/gi, "{{contact.first_name}}"],
+  [/\{\{?\s*(?:user\.name|opener|rep|rep\s*name|agent|agent\s*name|sender)\s*\}?\}/gi, "{{user.name}}"],
+];
+
 const COMPLIANCE_BANNED = BLOCKLIST.join(", ");
 const COMPLIANCE_SUBS = SUBSTITUTIONS.map(([a, b]) => a + " -> " + b).join("; ");
+const ALLOWED_VARS_STR = ALLOWED_TOKENS.join(" y ");
 
 function reEscape(s: string): string { return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&"); }
+
+// Normaliza los tokens que el modelo escriba a los 2 merge fields de GHL permitidos.
+function normalizeTokens(s: string): string {
+  let t = String(s || "");
+  for (const [re, canon] of TOKEN_ALIASES) t = t.replace(re, canon);
+  return t;
+}
+// Largo "as-delivered": cada token cuenta como el valor que rellena, no su literal.
+function renderLen(s: string): number {
+  let t = String(s || "");
+  for (const tok of Object.keys(TOKEN_RENDER_LEN)) t = t.split(tok).join("x".repeat(TOKEN_RENDER_LEN[tok]));
+  return t.length;
+}
 
 // Quita cualquier lenguaje de opt-out / STOP / HELP / rates que el modelo agregue.
 function stripOptOut(s: string): string {
@@ -685,25 +776,30 @@ function stripOptOut(s: string): string {
     .trim();
 }
 
-// Compuerta de compliance para un SMS. Devuelve texto limpio + violaciones.
-function checkCompliance(raw: string): { text: string; ok: boolean; violations: string[] } {
+// Compuerta de compliance para un SMS. Devuelve texto limpio (tokens normalizados),
+// el largo "as-delivered" y las violaciones.
+function checkCompliance(raw: string): { text: string; len: number; ok: boolean; violations: string[] } {
   const violations: string[] = [];
-  const text = stripOptOut(raw);
+  const text = normalizeTokens(stripOptOut(raw));
   const lower = text.toLowerCase();
 
   for (const term of BLOCKLIST) {
     const re = new RegExp("\\b" + reEscape(term).replace(/ +/g, "\\s+") + "\\b", "i");
     if (re.test(lower)) violations.push('banned: "' + term + '"');
   }
-  if (text.length > SMS_MAX_CHARS) violations.push("too long: " + text.length + "/" + SMS_MAX_CHARS);
+  // Variables: SOLO se permiten las dos de GHL; cualquier otro {token} es violación.
+  const badTokens = (text.match(/\{{1,2}[^{}]*\}{1,2}/g) || []).filter((tk) => !ALLOWED_TOKENS.includes(tk));
+  for (const tk of [...new Set(badTokens)]) violations.push("invalid variable " + tk + " (only " + ALLOWED_VARS_STR + " allowed)");
+  const len = renderLen(text);
+  if (len > SMS_MAX_CHARS) violations.push("too long: " + len + "/" + SMS_MAX_CHARS + " (as delivered)");
   if (UCS2_CHARS.test(text)) violations.push("non-GSM char (emoji/smart-quote/em-dash) -> UCS-2");
   for (const d of SHORTENERS) if (lower.includes(d)) violations.push("link shortener: " + d);
   const caps = (text.match(/\b[A-Z]{2,}\b/g) || []).filter((w) => !CAPS_OK.includes(w));
   if (caps.length) violations.push("ALL-CAPS: " + caps.join(", "));
   if ((text.match(/[!?]/g) || []).length > 1) violations.push("excessive ! or ?");
-  if (/\b(100%|will save|always save)\b/i.test(text)) violations.push("absolute promise");
+  if (/100\s?%|\bwill save\b|\balways save\b|\bno risk\b/i.test(text)) violations.push("absolute promise");
 
-  return { text, ok: violations.length === 0, violations };
+  return { text, len, ok: violations.length === 0, violations };
 }
 
 // ---- FASE 3: generador de secuencias SMS con IA (rendimiento + persona + voz de marca) ----
@@ -735,12 +831,15 @@ async function generate(cfg: Record<string, string>, body: any) {
     "Principles:",
     "- Ground every choice in the DATA + PERSONA. Lead with the winning angle: stacking + one affordable payment (up to 50-70% lower) + legal shield. They WANT to pay — never imply debt erasure or evasion.",
     "- Model structure on the best-response and best-LT messages; avoid the structure of the highest-opt-out message.",
-    "- Mirror the persona's exact language and metrics (weekly/daily $, % reduction; name lenders like OnDeck/Forward). Pre-empt the #1 objection (distrust) early: attorney-led, no upfront, we know your lenders.",
-    "- HARD LIMIT: every SMS MUST be 150 characters or fewer, counting spaces and merge tokens. Shorter is better. Use the existing merge tokens where natural: {nombre} (first name), {opener} (rep name), {monto} (amount).",
+    "- Mirror the persona's language and metrics (weekly/daily payments, % reduction). Pre-empt the #1 objection (distrust) early: attorney-led, no upfront, we understand your exact situation. Do NOT name or reference their 'lender(s)' — that word is banned; say 'your positions' or 'your current accounts' instead.",
+    "- HARD LIMIT: every SMS MUST be 150 characters or fewer AS DELIVERED (a merge token counts as the short value it fills in — a first name / a rep name — not its literal length). Shorter is better.",
+    "- VARIABLES: the ONLY two allowed are {{contact.first_name}} (lead first name) and {{user.name}} (sender/rep name) — write them verbatim, with double curly braces. Do NOT use ANY other variable or merge field: no amount, dollar, company, city, day or time token. If you'd cite a dollar amount, phrase it generically ('your weekly payments', 'your positions') with NO number token. Any other {token} is auto-flagged as a failure.",
+    "- The PERFORMANCE examples below use internal placeholders like {nombre}, {opener}, {monto}. In YOUR output translate {nombre} -> {{contact.first_name}}, {opener} -> {{user.name}}, and DROP {monto} entirely (rewrite the line without any amount).",
     "- NEVER include opt-out, STOP, HELP, unsubscribe, or 'msg & data rates' language anywhere — not even on the first message. The client appends the legally-required opt-out separately, downstream. Any STOP/opt-out text is stripped automatically and counts as a failure.",
-    "- Identify the sender by rep name ({opener}) and stay truthful; always use 'up to' with any percentage. Do NOT add any compliance/opt-out footer.",
+    "- Identify the sender by rep name ({{user.name}}) and stay truthful; always use 'up to' with any percentage. Do NOT add any compliance/opt-out footer.",
     "- BANNED WORDS (hardcoded; auto-flagged in code after you write — never use, in any form or casing): " + COMPLIANCE_BANNED + ".",
     "- Prefer these safer substitutions instead: " + COMPLIANCE_SUBS + ".",
+    "- The PERSONA/BRAND context may itself contain banned words (it describes their 'lenders', 'debt', 'settlement'). NEVER copy those words into an SMS — always translate to the allowed vocabulary above.",
     "- Plain ASCII only: no emojis, no smart quotes or em-dashes, no ALL-CAPS words, at most one '!' or '?' in total, no link shorteners.",
     "- Produce testable VARIANTS with distinct hooks/angles so performance can compare them — not one final copy.",
     "Respond with ONLY valid JSON (no markdown fences, no prose) matching the schema in the user message.",
