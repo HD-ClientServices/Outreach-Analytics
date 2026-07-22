@@ -170,9 +170,12 @@ tbody tr:hover{background:var(--surface)}
 .gen-chars{font-family:var(--font-mono);font-size:11px;color:var(--muted-2)}
 .gen-chars.over{color:var(--danger)}
 .gen-why{font-size:12.5px;color:var(--muted);line-height:1.45;flex:1;min-width:180px}
+.gen-copy{position:absolute;top:10px;right:14px;display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--muted-2);background:var(--card);border:1px solid var(--border-side);border-radius:6px;padding:3px 8px;opacity:.5;transition:opacity .14s ease,color .14s ease;pointer-events:none;white-space:nowrap}
+.gen-msg:hover .gen-copy{opacity:1;color:var(--foreground)}
+.gen-msg.copied .gen-copy{opacity:0}
 .gen-copied{position:absolute;top:10px;right:14px;font-size:11px;font-weight:700;color:#16a34a;background:var(--card);border:1px solid rgba(22,163,74,.45);border-radius:6px;padding:3px 9px;opacity:0;transform:translateY(-4px) scale(.92);transition:opacity .16s ease, transform .16s ease;pointer-events:none;white-space:nowrap}
 .gen-msg.copied .gen-copied{opacity:1;transform:translateY(0) scale(1)}
-@media (prefers-reduced-motion:reduce){.gen-msg,.gen-copied{transition:none}}
+@media (prefers-reduced-motion:reduce){.gen-msg,.gen-copied,.gen-copy{transition:none}}
 .gen-err{margin-top:22px;background:var(--danger-soft);border:1px solid var(--danger);border-radius:var(--radius);padding:14px 18px;font-size:13.5px;color:var(--danger);line-height:1.55}
 .gen-err pre{white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:12px;margin:8px 0 0}
 @media (max-width:760px){.gform{grid-template-columns:1fr 1fr}}
@@ -372,7 +375,7 @@ function genRender(d){
         +'<span class="gen-chars'+(chars>150?' over':'')+'" title="as delivered — merge fields count as the value they fill in, not their literal length">'+chars+'/150 chars</span>'
         +(viol.length?'<span class="gen-chars over" title="'+esc(viol.join(" · "))+'">⚠ '+viol.length+' compliance</span>':'<span class="gen-chars" style="color:#16a34a">✓ compliant</span>')
         +(m.why?'<span class="gen-why">'+esc(m.why)+'</span>':'')
-        +'</div></div><div class="gen-copied">Copiado ✓</div></div>';
+        +'</div></div><span class="gen-copy" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy</span><div class="gen-copied">Copiado ✓</div></div>';
     });
     H+='</div>';
   });
