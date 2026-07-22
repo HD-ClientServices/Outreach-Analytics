@@ -149,6 +149,7 @@ tbody tr:hover{background:var(--surface)}
 .gfield label .opt{color:var(--muted-2);font-weight:400}
 .gfield input,.gfield textarea,.gfield select{font-family:var(--font-sans);font-size:14px;color:var(--foreground);background:var(--background);border:1px solid var(--border);border-radius:8px;padding:9px 11px;outline:none;width:100%}
 .gfield textarea{resize:vertical;line-height:1.5}
+.gfield select{appearance:none;-webkit-appearance:none;-moz-appearance:none;padding-right:30px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center}
 .gfield input:focus,.gfield textarea:focus,.gfield select:focus{border-color:var(--foreground)}
 .gf-actions{flex-direction:row;align-items:center;gap:14px;margin-top:2px}
 .gbtn{font-family:var(--font-sans);font-size:14px;font-weight:600;color:var(--accent-fg);background:var(--accent);border:none;border-radius:999px;padding:11px 22px;cursor:pointer}
@@ -278,16 +279,12 @@ tbody tr:hover{background:var(--surface)}
       <textarea id="g_goal" rows="2" placeholder="e.g. cold outreach to stacked contractors who are current but drowning"></textarea>
     </div>
     <div class="gfield gf-wide">
-      <label>Audience / segment <span class="opt">(optional)</span></label>
+      <label>Audience <span class="opt">(optional)</span></label>
       <input id="g_aud" type="text" placeholder="e.g. trades/construction with a UCC lien blocking an SBA" />
     </div>
     <div class="gfield">
       <label>Messages per sequence</label>
       <input id="g_msgs" type="number" min="3" max="12" value="6" />
-    </div>
-    <div class="gfield">
-      <label>A/B variants</label>
-      <input id="g_vars" type="number" min="1" max="3" value="2" />
     </div>
     <div class="gfield">
       <label>Data window</label>
@@ -333,7 +330,7 @@ function genRun(){
     goal:document.getElementById("g_goal").value.trim(),
     audience:document.getElementById("g_aud").value.trim(),
     messages:parseInt(document.getElementById("g_msgs").value)||6,
-    variants:parseInt(document.getElementById("g_vars").value)||2,
+    variants:1,
     lang:"English",
     win:document.getElementById("g_win").value
   };
