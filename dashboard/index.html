@@ -496,37 +496,35 @@ function aiInside(){
   var w=W(), ins=w&&w.insights;
   var best=(ins&&ins.replicate)||[], worst=(ins&&ins.remove)||[];
   var head='<div class="ai-head"><span class="ai-badge"><span class="spark">✦</span> AI Inside</span>'
-    +'<div class="ai-sub">Expert findings on your best- and worst-performing messages · '+ST.win+'-day window</div></div>';
+    +'<div class="ai-sub">A global read of your outbound performance · '+ST.win+'-day window</div></div>';
   if(!best.length&&!worst.length){
     host.innerHTML='<div class="ai-panel">'+head
       +'<div class="ai-narr-empty" style="margin-bottom:20px"><div class="t">No message-level signal in this window yet — it appears once messages reach '+((ins&&ins.minSends)||10)+'+ sends. Try the 30-day window.</div></div></div>';
     return;
   }
-  // Fuente de los hallazgos, en orden: horneada en el snapshot (abierta) > cache de sesion (boton).
+  // Un solo texto de análisis global. Fuente en orden: horneado en el snapshot (abierto) > cache de sesion (boton).
+  // Si el dato viejo trae findings (lista), se colapsan en un solo texto hasta que se re-hornee la narrativa.
   var baked=ins&&ins.ai, cached=AI_READ_CACHE[ST.win], src=baked||cached, narr='';
   var stamp=(baked&&baked.at)?' · updated '+ago(baked.at)+' ago':((cached&&!baked)?' · this session':'');
-  if(src&&src.findings&&src.findings.length){
-    narr='<div class="ai-finds">'+src.findings.map(aiFindRow).join('')+'</div>'
-      +'<div class="ai-finds-by">✦ Analyzed by an AI expert panel'+stamp+'</div>';
-  } else if(src&&src.narrative){ // fallback: prosa (edge fn vieja o JSON no parseado)
-    narr='<div class="ai-narr">'+esc(src.narrative)+'<span class="by">✦ Analyzed by AI'+stamp+'</span></div>';
+  var txt=src&&(src.narrative||((src.findings&&src.findings.length)?src.findings.map(function(f){return (f.title||'')+(f.detail?' — '+f.detail:'');}).join('\n\n'):''));
+  if(txt){
+    narr='<div class="ai-narr">'+esc(txt)+'<span class="by">✦ Analyzed by AI'+stamp+'</span></div>';
   } else {
-    narr='<div class="ai-narr-empty"><div class="t">Have an AI expert panel read your best and worst messages and hand back a list of findings — what to copy, what to kill, what to watch.</div>'
-      +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">✦ Get findings</button></div>';
+    narr='<div class="ai-narr-empty"><div class="t">Have AI read your best- and worst-performing messages and hand back a single global analysis — what\'s working, what isn\'t, and the one change to make.</div>'
+      +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">✦ Get analysis</button></div>';
   }
-  host.innerHTML='<div class="ai-panel">'+head+narr
-    +'<div class="ai-cols">'+aiCol(best,true)+aiCol(worst,false)+'</div></div>';
+  host.innerHTML='<div class="ai-panel">'+head+narr+'</div>';
 }
 function aiRead(){
   var b=document.getElementById('aiGenBtn'); if(b){b.textContent='Analyzing…';b.disabled=true;}
   fetch(EP+"?action=insight_ai&win="+ST.win+opParam())
     .then(function(r){return r.json()})
     .then(function(d){
-      if(opFail(d)){ if(b){b.textContent='✦ Get findings';b.disabled=false;} return; }
-      if(d.error){ if(b){b.textContent='✦ Get findings';b.disabled=false;} alert(d.error); return; }
+      if(opFail(d)){ if(b){b.textContent='✦ Get analysis';b.disabled=false;} return; }
+      if(d.error){ if(b){b.textContent='✦ Get analysis';b.disabled=false;} alert(d.error); return; }
       AI_READ_CACHE[ST.win]={findings:d.findings||null, narrative:d.narrative||null}; aiInside();
     })
-    .catch(function(){ if(b){b.textContent='✦ Get findings';b.disabled=false;} });
+    .catch(function(){ if(b){b.textContent='✦ Get analysis';b.disabled=false;} });
 }
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
   return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}

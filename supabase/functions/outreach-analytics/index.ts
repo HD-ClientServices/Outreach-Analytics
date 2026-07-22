@@ -990,12 +990,13 @@ async function generate(cfg: Record<string, string>, body: any) {
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
 }
 
-// ---- INSIGHTS con IA: PANEL DE EXPERTOS que devuelve una LISTA DE HALLAZGOS -----
-// Recibe los insights deterministas (replicate/remove) y pide a la IA una lista de findings
-// tipados (cada uno = veredicto de un experto: copy / conversión / entregabilidad / cadencia).
-// Lo usan (a) build(), que lo HORNEA en el snapshot para servirlo ABIERTO sin clave, y (b) la
-// acción on-demand insight_ai. Best-effort + timeout duro: si Anthropic falla/tarda devuelve
-// {error} y el llamador sigue sin romperse. Si el JSON no parsea, cae a {narrative} en prosa.
+// ---- INSIGHTS con IA: ANÁLISIS GLOBAL en prosa (un solo texto, NO lista mensaje-por-mensaje) --
+// Recibe los insights deterministas (replicate/remove) y pide a la IA UN análisis global (110-170
+// palabras) que lee el panorama entero: patrón que separa lo que convierte, palanca principal,
+// riesgo mayor y una recomendación. Devuelve {narrative}. Lo usan (a) build(), que lo HORNEA en el
+// snapshot para servirlo ABIERTO sin clave, y (b) la acción on-demand insight_ai. Best-effort +
+// timeout duro: si Anthropic falla/tarda devuelve {error} y el llamador sigue sin romperse.
+// (parseFindings quedó como legacy — ya no se usa; el output es prosa directa.)
 function parseFindings(text: string): any[] | null {
   let s = (text || "").trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -1018,15 +1019,15 @@ async function aiFindings(
   akey: string, win: string, replicate: any[], remove: any[],
 ): Promise<{ findings?: any[]; narrative?: string; error?: string; elapsedMs?: number }> {
   const sys = [
-    "You are a PANEL of senior experts auditing outbound SMS for MCA debt-restructuring:",
-    "a direct-response copywriter, a conversion strategist, a deliverability/compliance specialist,",
-    "and a cadence/timing analyst. You receive the BEST and WORST performing messages with their",
+    "You are a senior outbound-SMS strategist auditing an MCA debt-restructuring campaign.",
+    "You receive the BEST and WORST performing messages of the sequences, each with its",
     "response, live-transfer and opt-out rates.",
-    "Produce a LIST OF FINDINGS — sharp, specific, non-obvious — each written by the relevant expert.",
-    "Return STRICT JSON only, no markdown, no preamble:",
-    '{"findings":[{"lens":"<discipline, 1-2 words>","verdict":"win|kill|watch","title":"<punchy takeaway, <=90 chars>","detail":"<ONE sentence naming the sms# + sequence + the metric that proves it>"}]}',
-    "Give 4-6 findings. Mix wins (patterns to replicate), kills (what to cut and why) and watch-outs (risks).",
-    "Be concrete: cite the sms#, the sequence and the exact rate. Draw the reusable rule — never just restate raw numbers.",
+    "Write ONE cohesive GLOBAL analysis in plain prose — NOT a per-message list, NOT bullet points.",
+    "Step back and read the whole picture: the overarching pattern that separates what converts from",
+    "what doesn't, the main lever to pull, and the single biggest risk. You may cite a sequence or an",
+    "sms# as evidence, but frame it as an overall read, never a message-by-message breakdown.",
+    "Rules: 110-170 words, 1-2 short paragraphs, no headers, no markdown, no JSON.",
+    "End with one clear, actionable recommendation. Return ONLY the prose text, no preamble.",
   ].join("\n");
   const user = "WINDOW: " + win + "d\n\nBEST (replicate):\n" + JSON.stringify(replicate) +
     "\n\nWORST (remove):\n" + JSON.stringify(remove);
@@ -1038,7 +1039,7 @@ async function aiFindings(
     r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 900, system: sys, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 700, system: sys, messages: [{ role: "user", content: user }] }),
       signal: ctrl.signal,
     });
   } catch (e) { clearTimeout(timer); return { error: "fetch a Anthropic fallo: " + String(e) }; }
@@ -1046,9 +1047,7 @@ async function aiFindings(
   if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 300) };
   const j = await r.json();
   const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
-  const findings = parseFindings(text);
-  if (findings && findings.length) return { findings, elapsedMs: Date.now() - t0 };
-  return { narrative: text, elapsedMs: Date.now() - t0 }; // fallback si el JSON no vino limpio
+  return { narrative: text, elapsedMs: Date.now() - t0 }; // análisis global en prosa (un solo texto)
 }
 
 // Acción on-demand: lee los insights del último snapshot y devuelve el análisis IA en vivo.
