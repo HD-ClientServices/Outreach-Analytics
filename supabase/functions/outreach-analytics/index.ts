@@ -586,8 +586,9 @@ async function build(cfg?: Record<string, string>) {
         const ins = out.windows[win] && out.windows[win].insights;
         if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length))) continue;
         try {
-          const a = await aiInsightNarrative(akey, String(win), ins.replicate || [], ins.remove || []);
-          if (a && a.narrative) ins.ai = { narrative: a.narrative, model: GEN_MODEL, at: new Date().toISOString() };
+          const a = await aiFindings(akey, String(win), ins.replicate || [], ins.remove || []);
+          if (a && ((a.findings && a.findings.length) || a.narrative))
+            ins.ai = { findings: a.findings || null, narrative: a.narrative || null, model: GEN_MODEL, at: new Date().toISOString() };
         } catch (_e) { /* best-effort: la IA no bloquea el build */ }
       }
     }
@@ -989,24 +990,46 @@ async function generate(cfg: Record<string, string>, body: any) {
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
 }
 
-// ---- INSIGHTS con IA: análisis escrito de los mejores/peores mensajes -----
-// Helper reutilizable: recibe los insights deterministas (replicate/remove) y pide a la IA
-// una lectura accionable. Lo usan (a) build(), que lo HORNEA en el snapshot para servirlo
-// ABIERTO sin clave, y (b) la acción on-demand insight_ai. Best-effort + timeout duro: si
-// Anthropic falla o tarda, devuelve {error} y el llamador sigue sin romperse.
-async function aiInsightNarrative(
+// ---- INSIGHTS con IA: PANEL DE EXPERTOS que devuelve una LISTA DE HALLAZGOS -----
+// Recibe los insights deterministas (replicate/remove) y pide a la IA una lista de findings
+// tipados (cada uno = veredicto de un experto: copy / conversión / entregabilidad / cadencia).
+// Lo usan (a) build(), que lo HORNEA en el snapshot para servirlo ABIERTO sin clave, y (b) la
+// acción on-demand insight_ai. Best-effort + timeout duro: si Anthropic falla/tarda devuelve
+// {error} y el llamador sigue sin romperse. Si el JSON no parsea, cae a {narrative} en prosa.
+function parseFindings(text: string): any[] | null {
+  let s = (text || "").trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const a = s.indexOf("{"), b = s.lastIndexOf("}");
+  if (a >= 0 && b > a) s = s.slice(a, b + 1);
+  try {
+    const o = JSON.parse(s);
+    const arr = Array.isArray(o) ? o : (o.findings || o.hallazgos || null);
+    if (!Array.isArray(arr)) return null;
+    return arr.map((f: any) => ({
+      lens: String(f.lens || f.expert || f.discipline || "").slice(0, 40),
+      verdict: (["win", "kill", "watch"].includes(String(f.verdict)) ? f.verdict : "watch"),
+      title: String(f.title || f.finding || f.headline || "").slice(0, 160),
+      detail: String(f.detail || f.why || f.reason || f.evidence || "").slice(0, 400),
+    })).filter((f: any) => f.title);
+  } catch (_e) { return null; }
+}
+async function aiFindings(
   akey: string, win: string, replicate: any[], remove: any[],
-): Promise<{ narrative?: string; error?: string; elapsedMs?: number }> {
+): Promise<{ findings?: any[]; narrative?: string; error?: string; elapsedMs?: number }> {
   const sys = [
-    "You are a sharp growth analyst for outbound SMS in MCA debt-restructuring.",
-    "You get the BEST and WORST performing messages (with response, live-transfer and opt-out rates).",
-    "Write a SHORT digested read (max 110 words, plain text, no preamble, no markdown headers):",
-    "1) The 1-2 structural patterns that make the winners convert — phrased as reusable rules to copy.",
-    "2) What to kill and exactly why (name the metric that condemns it).",
-    "Be concrete and punchy. Reference the sms# and sequence. Do not just restate the raw numbers.",
+    "You are a PANEL of senior experts auditing outbound SMS for MCA debt-restructuring:",
+    "a direct-response copywriter, a conversion strategist, a deliverability/compliance specialist,",
+    "and a cadence/timing analyst. You receive the BEST and WORST performing messages with their",
+    "response, live-transfer and opt-out rates.",
+    "Produce a LIST OF FINDINGS — sharp, specific, non-obvious — each written by the relevant expert.",
+    "Return STRICT JSON only, no markdown, no preamble:",
+    '{"findings":[{"lens":"<discipline, 1-2 words>","verdict":"win|kill|watch","title":"<punchy takeaway, <=90 chars>","detail":"<ONE sentence naming the sms# + sequence + the metric that proves it>"}]}',
+    "Give 4-6 findings. Mix wins (patterns to replicate), kills (what to cut and why) and watch-outs (risks).",
+    "Be concrete: cite the sms#, the sequence and the exact rate. Draw the reusable rule — never just restate raw numbers.",
   ].join("\n");
-  const user = "WINDOW: " + win + "d\n\nREPLICATE (winners):\n" + JSON.stringify(replicate) +
-    "\n\nREMOVE (losers):\n" + JSON.stringify(remove);
+  const user = "WINDOW: " + win + "d\n\nBEST (replicate):\n" + JSON.stringify(replicate) +
+    "\n\nWORST (remove):\n" + JSON.stringify(remove);
   const t0 = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 25000);
@@ -1015,15 +1038,17 @@ async function aiInsightNarrative(
     r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 600, system: sys, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 900, system: sys, messages: [{ role: "user", content: user }] }),
       signal: ctrl.signal,
     });
   } catch (e) { clearTimeout(timer); return { error: "fetch a Anthropic fallo: " + String(e) }; }
   clearTimeout(timer);
   if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 300) };
   const j = await r.json();
-  const narrative = (j.content || []).map((b: any) => b.text || "").join("").trim();
-  return { narrative, elapsedMs: Date.now() - t0 };
+  const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
+  const findings = parseFindings(text);
+  if (findings && findings.length) return { findings, elapsedMs: Date.now() - t0 };
+  return { narrative: text, elapsedMs: Date.now() - t0 }; // fallback si el JSON no vino limpio
 }
 
 // Acción on-demand: lee los insights del último snapshot y devuelve el análisis IA en vivo.
@@ -1038,9 +1063,9 @@ async function insightAi(cfg: Record<string, string>, win: string) {
   const ins = w && w.insights;
   if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length)))
     return { error: "No insights yet — run a build with data first." };
-  const a = await aiInsightNarrative(akey, win, ins.replicate || [], ins.remove || []);
+  const a = await aiFindings(akey, win, ins.replicate || [], ins.remove || []);
   if (a.error) return { error: a.error };
-  return { ok: true, win, model: GEN_MODEL, elapsedMs: a.elapsedMs, narrative: a.narrative,
+  return { ok: true, win, model: GEN_MODEL, elapsedMs: a.elapsedMs, findings: a.findings || null, narrative: a.narrative || null,
     counts: { replicate: (ins.replicate || []).length, remove: (ins.remove || []).length } };
 }
 

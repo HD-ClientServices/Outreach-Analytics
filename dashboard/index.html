@@ -209,6 +209,17 @@ tbody tr:hover{background:var(--surface)}
 .ai-best .ai-msg-why{color:var(--green)}
 .ai-worst .ai-msg-why{color:var(--danger)}
 .ai-empty{font-size:13px;color:var(--muted-2)}
+/* findings list (panel de expertos) */
+.ai-finds{margin:16px 24px 0;display:flex;flex-direction:column;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.ai-find{display:grid;grid-template-columns:24px 1fr;gap:12px;background:var(--background);padding:13px 16px}
+.ai-find-ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:12px;font-weight:700;font-family:var(--font-mono);margin-top:1px}
+.ai-find--win .ai-find-ic{background:var(--green-soft);color:var(--green)}
+.ai-find--kill .ai-find-ic{background:var(--danger-soft);color:var(--danger)}
+.ai-find--watch .ai-find-ic{background:#fbf1d3;color:var(--amber)}
+.ai-find-t{font-size:14px;line-height:1.45;color:var(--foreground);font-weight:500}
+.ai-lens{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-2);background:var(--card);border-radius:5px;padding:2px 7px;margin-right:8px;white-space:nowrap;vertical-align:1.5px}
+.ai-find-d{font-size:12.5px;line-height:1.5;color:var(--muted);margin-top:4px}
+.ai-finds-by{margin:11px 24px 2px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
 @media (max-width:720px){.ai-cols{grid-template-columns:1fr}}
 </style></head>
 <body><div class="wrap">
@@ -473,35 +484,49 @@ function aiCol(items,good){
   else items.forEach(function(m){h+=aiMsgCard(m,good)});
   return h+'</div>';
 }
+function aiFindRow(f){
+  var v=(f.verdict=='win'||f.verdict=='kill'||f.verdict=='watch')?f.verdict:'watch';
+  var ic=v=='win'?'✓':v=='kill'?'✕':'!';
+  return '<div class="ai-find ai-find--'+v+'"><span class="ai-find-ic">'+ic+'</span>'
+    +'<div><div class="ai-find-t">'+(f.lens?'<span class="ai-lens">'+esc(f.lens)+'</span>':'')+esc(f.title||'')+'</div>'
+    +(f.detail?'<div class="ai-find-d">'+esc(f.detail)+'</div>':'')+'</div></div>';
+}
 function aiInside(){
   var host=document.getElementById("aiInside"); if(!host) return;
   var w=W(), ins=w&&w.insights;
   var best=(ins&&ins.replicate)||[], worst=(ins&&ins.remove)||[];
   var head='<div class="ai-head"><span class="ai-badge"><span class="spark">✦</span> AI Inside</span>'
-    +'<div class="ai-sub">AI analysis of your best- and worst-performing messages · '+ST.win+'-day window</div></div>';
+    +'<div class="ai-sub">Expert findings on your best- and worst-performing messages · '+ST.win+'-day window</div></div>';
   if(!best.length&&!worst.length){
     host.innerHTML='<div class="ai-panel">'+head
       +'<div class="ai-narr-empty" style="margin-bottom:20px"><div class="t">No message-level signal in this window yet — it appears once messages reach '+((ins&&ins.minSends)||10)+'+ sends. Try the 30-day window.</div></div></div>';
     return;
   }
-  var baked=ins&&ins.ai&&ins.ai.narrative, cached=AI_READ_CACHE[ST.win], narr='';
-  if(baked) narr='<div class="ai-narr">'+esc(baked)+'<span class="by">✦ Written by AI'+(ins.ai.at?' · updated '+ago(ins.ai.at)+' ago':'')+'</span></div>';
-  else if(cached) narr='<div class="ai-narr">'+esc(cached)+'<span class="by">✦ Written by AI · this session</span></div>';
-  else narr='<div class="ai-narr-empty"><div class="t">Have the AI read your best and worst messages and hand back the patterns to copy and the ones to kill.</div>'
-    +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">✦ AI read</button></div>';
+  // Fuente de los hallazgos, en orden: horneada en el snapshot (abierta) > cache de sesion (boton).
+  var baked=ins&&ins.ai, cached=AI_READ_CACHE[ST.win], src=baked||cached, narr='';
+  var stamp=(baked&&baked.at)?' · updated '+ago(baked.at)+' ago':((cached&&!baked)?' · this session':'');
+  if(src&&src.findings&&src.findings.length){
+    narr='<div class="ai-finds">'+src.findings.map(aiFindRow).join('')+'</div>'
+      +'<div class="ai-finds-by">✦ Analyzed by an AI expert panel'+stamp+'</div>';
+  } else if(src&&src.narrative){ // fallback: prosa (edge fn vieja o JSON no parseado)
+    narr='<div class="ai-narr">'+esc(src.narrative)+'<span class="by">✦ Analyzed by AI'+stamp+'</span></div>';
+  } else {
+    narr='<div class="ai-narr-empty"><div class="t">Have an AI expert panel read your best and worst messages and hand back a list of findings — what to copy, what to kill, what to watch.</div>'
+      +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">✦ Get findings</button></div>';
+  }
   host.innerHTML='<div class="ai-panel">'+head+narr
     +'<div class="ai-cols">'+aiCol(best,true)+aiCol(worst,false)+'</div></div>';
 }
 function aiRead(){
-  var b=document.getElementById('aiGenBtn'); if(b){b.textContent='Reading…';b.disabled=true;}
+  var b=document.getElementById('aiGenBtn'); if(b){b.textContent='Analyzing…';b.disabled=true;}
   fetch(EP+"?action=insight_ai&win="+ST.win+opParam())
     .then(function(r){return r.json()})
     .then(function(d){
-      if(opFail(d)){ if(b){b.textContent='✦ AI read';b.disabled=false;} return; }
-      if(d.error){ if(b){b.textContent='✦ AI read';b.disabled=false;} alert(d.error); return; }
-      AI_READ_CACHE[ST.win]=d.narrative||''; aiInside();
+      if(opFail(d)){ if(b){b.textContent='✦ Get findings';b.disabled=false;} return; }
+      if(d.error){ if(b){b.textContent='✦ Get findings';b.disabled=false;} alert(d.error); return; }
+      AI_READ_CACHE[ST.win]={findings:d.findings||null, narrative:d.narrative||null}; aiInside();
     })
-    .catch(function(){ if(b){b.textContent='✦ AI read';b.disabled=false;} });
+    .catch(function(){ if(b){b.textContent='✦ Get findings';b.disabled=false;} });
 }
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
   return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}
