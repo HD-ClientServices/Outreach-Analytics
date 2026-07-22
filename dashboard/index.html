@@ -405,7 +405,6 @@ function render(){
   var w=W(); if(!w){document.getElementById("app").innerHTML='<div class="note">No data for this window.</div>';return}
   var H="";
   H+='<div class="controls" style="margin-top:22px"><div class="grp"><span class="lbl">Window</span><div class="grp" id="wins"></div></div></div>';
-  H+='<div class="sec" id="insSec"><h2>Insights · messages to replicate &amp; retire</h2><div class="h">Best structures to clone vs. worst to remove — pooled across sequences, ranked by LT + response − opt-out. Also fed into the sequence generator.</div><div id="insBody"></div></div>';
   H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate</div>'
    + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
    + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
@@ -418,7 +417,7 @@ function render(){
    + '<th class="num">Resp. rate</th><th class="num">LT rate</th><th class="num">Opt-out rate</th>'
    + '</tr></thead><tbody id="t2"></tbody></table></div></div></div>';
   document.getElementById("app").innerHTML=H;
-  wins();insightsView();t1();pills();t2();
+  wins();t1();pills();t2();
   document.getElementById("stamp").textContent="Data from "+ago(DATA.snapshotAt||DATA.generatedAt)+" ago · "+ST.win+"-day window";
   var u=w.unidentified||{ing:0,lt:0};
   document.getElementById("foot").innerHTML="Source: GoHighLevel API v2 (read-only) · sms_analytics schema<br>"
