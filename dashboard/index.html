@@ -370,12 +370,12 @@ function genRender(d){
     (v.messages||[]).forEach(function(m){
       var chars=m.chars!=null?m.chars:String(m.text||"").length;
       var viol=(m.violations&&m.violations.length)?m.violations:(m.compliant===false?["flagged"]:[]);
-      H+='<div class="gen-msg" onclick="genCopyBox(this)" title="Click para copiar el mensaje"><div class="idx">#'+(m.n!=null?m.n:"")+(m.day!=null?'<span class="day">day '+m.day+'</span>':'')+'</div>'
+      H+='<div class="gen-msg" onclick="genCopyBox(this)" title="Click to copy the message"><div class="idx">#'+(m.n!=null?m.n:"")+(m.day!=null?'<span class="day">day '+m.day+'</span>':'')+'</div>'
         +'<div><div class="gen-txt">'+esc(m.text||"")+'</div><div class="gen-meta">'
         +'<span class="gen-chars'+(chars>150?' over':'')+'" title="as delivered — merge fields count as the value they fill in, not their literal length">'+chars+'/150 chars</span>'
         +(viol.length?'<span class="gen-chars over" title="'+esc(viol.join(" · "))+'">⚠ '+viol.length+' compliance</span>':'<span class="gen-chars" style="color:#16a34a">✓ compliant</span>')
         +(m.why?'<span class="gen-why">'+esc(m.why)+'</span>':'')
-        +'</div></div><span class="gen-copy" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy</span><div class="gen-copied">Copiado ✓</div></div>';
+        +'</div></div><span class="gen-copy" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy</span><div class="gen-copied">Copied ✓</div></div>';
     });
     H+='</div>';
   });

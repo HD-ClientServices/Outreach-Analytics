@@ -838,7 +838,7 @@ function checkCompliance(raw: string): { text: string; len: number; ok: boolean;
 // ---- FASE 3: generador de secuencias SMS con IA (rendimiento + persona + voz de marca) ----
 async function generate(cfg: Record<string, string>, body: any) {
   const akey = (cfg.anthropic_api_key || "").trim();
-  if (!akey) return { error: "Falta 'anthropic_api_key' en la tabla sms_analytics.config. Agregala en el Table Editor de Supabase y reintenta." };
+  if (!akey) return { error: "Missing 'anthropic_api_key' in the sms_analytics.config table. Add it in the Supabase Table Editor and retry." };
   const model = GEN_MODEL;
   const brief = (body && body.brief) || {};
   const win = String(brief.win || "30");
@@ -892,7 +892,7 @@ async function generate(cfg: Record<string, string>, body: any) {
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({ model, max_tokens: 8000, system: sys, messages: [{ role: "user", content: user }] }),
     });
-  } catch (e) { return { error: "fetch a Anthropic falló: " + String(e) }; }
+  } catch (e) { return { error: "Anthropic fetch failed: " + String(e) }; }
   if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 400) };
   const j = await r.json();
   const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
@@ -948,7 +948,7 @@ async function generate(cfg: Record<string, string>, body: any) {
   return { ok: true, model, elapsedMs: Date.now() - t0,
     brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win },
     compliance: { checked, flagged, repaired, maxChars: SMS_MAX_CHARS,
-      note: "Las reglas de palabras/formato se aplican aca, pero el outbound frio de MCA/debt-restructuring es una categoria que T-Mobile/Twilio/TCR prohiben formalmente: la entregabilidad depende de la reputacion del numero, el consentimiento y la rotacion, no solo del copy." },
+      note: "Word/format rules are enforced here, but cold MCA/debt-restructuring outbound is a category formally prohibited by T-Mobile/Twilio/TCR: deliverability depends on number reputation, consent and rotation, not just the copy." },
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
 }
 
@@ -956,7 +956,7 @@ async function generate(cfg: Record<string, string>, body: any) {
 // Toma los insights deterministas del snapshot y pide a la IA un resumen accionable.
 async function insightAi(cfg: Record<string, string>, win: string) {
   const akey = (cfg.anthropic_api_key || "").trim();
-  if (!akey) return { error: "Falta 'anthropic_api_key' en sms_analytics.config." };
+  if (!akey) return { error: "Missing 'anthropic_api_key' in sms_analytics.config." };
   const model = GEN_MODEL;
   const snap = await withDb(async (c) => {
     const q = await c.queryObject<{ data: any }>("select data from sms_analytics.snapshots_v2 order by id desc limit 1");
@@ -965,7 +965,7 @@ async function insightAi(cfg: Record<string, string>, win: string) {
   const w = snap && snap.windows && snap.windows[win];
   const ins = w && w.insights;
   if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length)))
-    return { error: "No hay insights todavia — corre un build con datos primero." };
+    return { error: "No insights yet — run a build with data first." };
   const sys = [
     "You are a sharp growth analyst for outbound SMS in MCA debt-restructuring.",
     "You get the BEST and WORST performing messages (with response, live-transfer and opt-out rates).",
