@@ -180,6 +180,36 @@ tbody tr:hover{background:var(--surface)}
 .gen-err{margin-top:22px;background:var(--danger-soft);border:1px solid var(--danger);border-radius:var(--radius);padding:14px 18px;font-size:13.5px;color:var(--danger);line-height:1.55}
 .gen-err pre{white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:12px;margin:8px 0 0}
 @media (max-width:760px){.gform{grid-template-columns:1fr 1fr}}
+
+/* ---- AI Inside panel (first component in Performance) ---- */
+.ai-panel{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--background);overflow:hidden}
+.ai-head{padding:20px 24px 0}
+.ai-badge{display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:var(--accent-fg);font-size:12px;font-weight:600;letter-spacing:.02em;padding:6px 13px;border-radius:999px}
+.ai-badge .spark{font-size:12px;line-height:1}
+.ai-sub{font-size:13px;color:var(--muted);margin-top:11px;line-height:1.5}
+.ai-narr{margin:16px 24px 4px;background:var(--highlight);border:1px solid rgba(0,0,0,.06);border-radius:var(--radius);padding:16px 18px;font-size:14.5px;line-height:1.62;color:var(--foreground);white-space:pre-wrap}
+.ai-narr .by{display:block;margin-top:11px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
+.ai-narr-empty{margin:16px 24px 4px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px}
+.ai-narr-empty .t{font-size:13px;color:var(--muted);line-height:1.5;flex:1;min-width:220px}
+.ai-genbtn{font-family:var(--font-sans);font-size:13px;font-weight:600;color:var(--accent-fg);background:var(--accent);border:none;border-radius:999px;padding:9px 16px;cursor:pointer;white-space:nowrap}
+.ai-genbtn:disabled{opacity:.55;cursor:default}
+.ai-cols{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border-top:1px solid var(--border);margin-top:18px}
+.ai-col{background:var(--background);padding:18px 24px 22px}
+.ai-col-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px}
+.ai-col-h .dot{width:8px;height:8px;border-radius:50%}
+.ai-best .ai-col-h{color:var(--green)}.ai-best .dot{background:var(--green)}
+.ai-worst .ai-col-h{color:var(--danger)}.ai-worst .dot{background:var(--danger)}
+.ai-msg{padding:12px 0;border-top:1px solid var(--border-side)}
+.ai-msg:first-of-type{border-top:none;padding-top:2px}
+.ai-msg-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:5px}
+.ai-tag{font-family:var(--font-mono);font-size:10.5px;font-weight:600;color:var(--muted);background:var(--card);border-radius:6px;padding:2px 8px;white-space:nowrap}
+.ai-rates{font-family:var(--font-mono);font-size:11px;color:var(--muted-2);letter-spacing:-.01em}
+.ai-msg-txt{font-size:14px;line-height:1.5;color:var(--foreground)}
+.ai-msg-why{font-size:12px;line-height:1.45;margin-top:5px}
+.ai-best .ai-msg-why{color:var(--green)}
+.ai-worst .ai-msg-why{color:var(--danger)}
+.ai-empty{font-size:13px;color:var(--muted-2)}
+@media (max-width:720px){.ai-cols{grid-template-columns:1fr}}
 </style></head>
 <body><div class="wrap">
 <h1>Outreach <em>analytics</em>.</h1>
@@ -406,6 +436,7 @@ function render(){
   var w=W(); if(!w){document.getElementById("app").innerHTML='<div class="note">No data for this window.</div>';return}
   var H="";
   H+='<div class="controls" style="margin-top:22px"><div class="grp"><span class="lbl">Window</span><div class="grp" id="wins"></div></div></div>';
+  H+='<div class="sec" id="aiInside"></div>';
   H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate</div>'
    + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
    + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
@@ -418,50 +449,59 @@ function render(){
    + '<th class="num">Resp. rate</th><th class="num">LT rate</th><th class="num">Opt-out rate</th>'
    + '</tr></thead><tbody id="t2"></tbody></table></div></div></div>';
   document.getElementById("app").innerHTML=H;
-  wins();t1();pills();t2();
+  wins();aiInside();t1();pills();t2();
   document.getElementById("stamp").textContent="Data from "+ago(DATA.snapshotAt||DATA.generatedAt)+" ago · "+ST.win+"-day window";
   var u=w.unidentified||{ing:0,lt:0};
   document.getElementById("foot").innerHTML="Source: GoHighLevel API v2 (read-only) · sms_analytics schema<br>"
     +"Outside the 3 sequences: "+nf(u.ing)+" contacts · "+nf(u.lt)+" LT (other workflows or manual sends)";
 }
+// ---- AI Inside: primer componente de Performance. La IA analiza los mejores y peores mensajes.
+// La narrativa se sirve de 3 fuentes, en orden: (1) horneada en el snapshot (insights.ai, ABIERTA,
+// sin clave) → aparece sola tras el build nuevo; (2) cache de sesion del boton "AI read";
+// (3) si no hay ninguna, un boton que la genera on-demand via insight_ai (pide clave de operador).
 var AI_READ_CACHE={};
+function aiMsgCard(m,good){
+  var tag=esc(m.seq)+' · '+m.pos+((m.branch&&m.branch!='-')?m.branch:'');
+  return '<div class="ai-msg"><div class="ai-msg-top"><span class="ai-tag">'+tag+'</span>'
+    +'<span class="ai-rates">resp '+m.replyRate+'% · LT '+m.ltRate+'% · opt '+m.dndRate+'% · '+nf(m.sends)+' sent</span></div>'
+    +'<div class="ai-msg-txt">'+esc(m.text)+'</div>'
+    +(m.reason?'<div class="ai-msg-why">'+esc(m.reason)+'</div>':'')+'</div>';
+}
+function aiCol(items,good){
+  var h='<div class="ai-col '+(good?'ai-best':'ai-worst')+'"><div class="ai-col-h"><span class="dot"></span>'+(good?'Best performers':'Worst performers')+'</div>';
+  if(!items.length) h+='<div class="ai-empty">Not enough data in this window yet.</div>';
+  else items.forEach(function(m){h+=aiMsgCard(m,good)});
+  return h+'</div>';
+}
+function aiInside(){
+  var host=document.getElementById("aiInside"); if(!host) return;
+  var w=W(), ins=w&&w.insights;
+  var best=(ins&&ins.replicate)||[], worst=(ins&&ins.remove)||[];
+  var head='<div class="ai-head"><span class="ai-badge"><span class="spark">✦</span> AI Inside</span>'
+    +'<div class="ai-sub">AI analysis of your best- and worst-performing messages · '+ST.win+'-day window</div></div>';
+  if(!best.length&&!worst.length){
+    host.innerHTML='<div class="ai-panel">'+head
+      +'<div class="ai-narr-empty" style="margin-bottom:20px"><div class="t">No message-level signal in this window yet — it appears once messages reach '+((ins&&ins.minSends)||10)+'+ sends. Try the 30-day window.</div></div></div>';
+    return;
+  }
+  var baked=ins&&ins.ai&&ins.ai.narrative, cached=AI_READ_CACHE[ST.win], narr='';
+  if(baked) narr='<div class="ai-narr">'+esc(baked)+'<span class="by">✦ Written by AI'+(ins.ai.at?' · updated '+ago(ins.ai.at)+' ago':'')+'</span></div>';
+  else if(cached) narr='<div class="ai-narr">'+esc(cached)+'<span class="by">✦ Written by AI · this session</span></div>';
+  else narr='<div class="ai-narr-empty"><div class="t">Have the AI read your best and worst messages and hand back the patterns to copy and the ones to kill.</div>'
+    +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">✦ AI read</button></div>';
+  host.innerHTML='<div class="ai-panel">'+head+narr
+    +'<div class="ai-cols">'+aiCol(best,true)+aiCol(worst,false)+'</div></div>';
+}
 function aiRead(){
-  var b=document.getElementById('aiReadBtn'), out=document.getElementById('aiReadOut');
-  if(!b||!out) return;
-  b.textContent='Reading…'; b.style.pointerEvents='none';
+  var b=document.getElementById('aiGenBtn'); if(b){b.textContent='Reading…';b.disabled=true;}
   fetch(EP+"?action=insight_ai&win="+ST.win+opParam())
     .then(function(r){return r.json()})
     .then(function(d){
-      b.textContent='✨ AI read'; b.style.pointerEvents='';
-      if(opFail(d)){ out.innerHTML=''; return; }
-      if(d.error){ out.innerHTML='<span class="nd">'+esc(d.error)+'</span>'; return; }
-      var html='<div class="note" style="white-space:pre-wrap;line-height:1.55">'+esc(d.narrative||'')+'</div>';
-      AI_READ_CACHE[ST.win]=html; out.innerHTML=html;
+      if(opFail(d)){ if(b){b.textContent='✦ AI read';b.disabled=false;} return; }
+      if(d.error){ if(b){b.textContent='✦ AI read';b.disabled=false;} alert(d.error); return; }
+      AI_READ_CACHE[ST.win]=d.narrative||''; aiInside();
     })
-    .catch(function(){ b.textContent='✨ AI read'; b.style.pointerEvents=''; out.innerHTML='<span class="nd">Network error</span>'; });
-}
-function insightsView(){
-  var w=W(); var el=document.getElementById("insBody"); if(!el) return;
-  var ins=w&&w.insights;
-  if(!ins||((!ins.replicate||!ins.replicate.length)&&(!ins.remove||!ins.remove.length))){
-    el.innerHTML='<div class="note">No message-level insights yet — they appear after the next data build (needs messages with '+((ins&&ins.minSends)||10)+'+ sends).</div>';
-    return;
-  }
-  function col(items,good){
-    var head=good?'✅ Replicate these':'⚠️ Remove these', c=good?'#16a34a':'var(--danger,#dc2626)';
-    var h='<div style="flex:1;min-width:280px"><div style="font-weight:600;margin-bottom:10px;color:'+c+'">'+head+'</div>';
-    if(!items.length) h+='<div class="nd">—</div>';
-    items.forEach(function(m){
-      h+='<div style="padding:10px 0;border-top:1px solid var(--line,rgba(0,0,0,.08))">'
-        +'<div style="margin-bottom:4px">'+esc(m.text)+'</div>'
-        +'<div style="font-family:var(--font-mono,monospace);font-size:11px;color:var(--muted-2,#9a9a9a)">'+esc(m.seq)+' · #'+m.pos+((m.branch&&m.branch!='-')?m.branch:'')+' — resp '+m.replyRate+'% · LT '+m.ltRate+'% · opt-out '+m.dndRate+'% · '+m.sends+' sent</div>'
-        +'<div style="font-size:12px;margin-top:3px;color:'+c+'">'+esc(m.reason)+'</div></div>';
-    });
-    return h+'</div>';
-  }
-  el.innerHTML='<div class="card" style="display:flex;gap:28px;flex-wrap:wrap">'+col(ins.replicate||[],true)+col(ins.remove||[],false)+'</div>'
-    +'<div style="margin-top:12px"><button class="pill" id="aiReadBtn" onclick="aiRead()">✨ AI read</button><div id="aiReadOut" style="margin-top:12px"></div></div>';
-  if(AI_READ_CACHE[ST.win]&&document.getElementById('aiReadOut')) document.getElementById('aiReadOut').innerHTML=AI_READ_CACHE[ST.win];
+    .catch(function(){ if(b){b.textContent='✦ AI read';b.disabled=false;} });
 }
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
   return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}
