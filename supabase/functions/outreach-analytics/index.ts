@@ -501,7 +501,7 @@ function computeInsights(win: any): any {
   return { replicate, remove, pool: pool.length, minSends };
 }
 
-async function build() {
+async function build(cfg?: Record<string, string>) {
   return await withDb(async (c) => {
     const out: any = { generatedAt: new Date().toISOString(), windows: {} };
     for (const win of [7, 14, 30]) {
@@ -576,6 +576,20 @@ async function build() {
         msgs: msgsByWf,
       };
       out.windows[win].insights = computeInsights(out.windows[win]);
+    }
+    // Capa IA horneada en el snapshot: por cada ventana con mejores/peores, la IA escribe su
+    // análisis y queda en insights.ai → el dashboard lo sirve ABIERTO (sin pedir clave a cada
+    // visitante). Best-effort: sin key o si Anthropic falla/tarda, el snapshot se guarda igual.
+    const akey = (cfg?.anthropic_api_key || "").trim();
+    if (akey) {
+      for (const win of [7, 14, 30]) {
+        const ins = out.windows[win] && out.windows[win].insights;
+        if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length))) continue;
+        try {
+          const a = await aiInsightNarrative(akey, String(win), ins.replicate || [], ins.remove || []);
+          if (a && a.narrative) ins.ai = { narrative: a.narrative, model: GEN_MODEL, at: new Date().toISOString() };
+        } catch (_e) { /* best-effort: la IA no bloquea el build */ }
+      }
     }
     await c.queryArray(`insert into sms_analytics.snapshots_v2(data) values ($1::jsonb)`, [JSON.stringify(out)]);
     await c.queryObject(`update sms_analytics.run set finished_at=now(), note='built' where id=1`);
@@ -912,14 +926,21 @@ async function generate(cfg: Record<string, string>, body: any) {
   };
   rescan();
 
-  // Auto-reparacion: si algo no cumple, pedimos reescribir SOLO esos (1 pasada acotada) y re-validamos.
-  if (parsed && flagged > 0) {
+  // Auto-reparacion ITERATIVA: reescribimos SOLO los flaggeados, hasta MAX_REPAIR_PASSES
+  // pasadas o hasta que no quede ninguno. Cada pasada re-valida en codigo; si una pasada
+  // no mejora NADA, cortamos (no tiene sentido seguir gastando API).
+  const MAX_REPAIR_PASSES = 3;
+  const rsys = "You rewrite outbound SMS so they pass hardcoded compliance rules. Keep the SAME intent. The ONLY variables allowed are {{contact.first_name}} and {{user.name}} — convert or remove any other token (e.g. an amount/{monto} token) and never invent new ones. Rules: <=150 chars as delivered; NO opt-out/STOP/HELP/'msg&data' text; plain ASCII only; no ALL-CAPS words; at most one ! or ? total; and NEVER use these banned words in any form: " +
+    COMPLIANCE_BANNED + ". Prefer: " + COMPLIANCE_SUBS + ". Respond with ONLY a JSON array echoing vi/mi: [{\"vi\":0,\"mi\":0,\"text\":\"...\"}].";
+  let repairPasses = 0;
+  while (parsed && flagged > 0 && repairPasses < MAX_REPAIR_PASSES) {
+    repairPasses++;
     const bad: any[] = [];
     parsed.variants.forEach((v: any, vi: number) => (v.messages || []).forEach((m: any, mi: number) => {
       if (m && m.violations && m.violations.length) bad.push({ vi, mi, text: m.text, fix: m.violations });
     }));
-    const rsys = "You rewrite outbound SMS so they pass hardcoded compliance rules. Keep the SAME intent. The ONLY variables allowed are {{contact.first_name}} and {{user.name}} — convert or remove any other token (e.g. an amount/{monto} token) and never invent new ones. Rules: <=150 chars as delivered; NO opt-out/STOP/HELP/'msg&data' text; plain ASCII only; no ALL-CAPS words; at most one ! or ? total; and NEVER use these banned words in any form: " +
-      COMPLIANCE_BANNED + ". Prefer: " + COMPLIANCE_SUBS + ". Respond with ONLY a JSON array echoing vi/mi: [{\"vi\":0,\"mi\":0,\"text\":\"...\"}].";
+    if (!bad.length) break;
+    let progressed = false;
     try {
       const rr = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -936,36 +957,46 @@ async function generate(cfg: Record<string, string>, body: any) {
             const m = parsed.variants[f.vi] && parsed.variants[f.vi].messages && parsed.variants[f.vi].messages[f.mi];
             if (m && typeof f.text === "string") {
               const chk = checkCompliance(f.text);
-              if (chk.violations.length < (m.violations || []).length) { m.text = f.text; repaired = true; } // solo si mejora
+              if (chk.violations.length < (m.violations || []).length) { m.text = f.text; repaired = true; progressed = true; } // solo si mejora
             }
           }
-          if (repaired) rescan();
+          rescan();
         }
       }
-    } catch (_) { /* nos quedamos con la 1a pasada */ }
+    } catch (_) { /* seguimos con lo que haya */ }
+    if (!progressed) break; // una pasada sin mejoras => no insistas
+  }
+
+  // GATE FINAL: cualquier mensaje que TODAVIA no cumpla se ELIMINA — nunca se ofrece uno riesgoso.
+  // Renumeramos los que quedan (n secuencial) y descartamos variantes que quedaron vacias.
+  let removed = 0;
+  if (parsed && Array.isArray(parsed.variants)) {
+    for (const v of parsed.variants) {
+      const msgs = (v.messages || []);
+      const kept = msgs.filter((m: any) => m && m.compliant !== false);
+      removed += msgs.length - kept.length;
+      kept.forEach((m: any, i: number) => { m.n = i + 1; });
+      v.messages = kept;
+    }
+    parsed.variants = parsed.variants.filter((v: any) => (v.messages || []).length > 0);
+    if (removed) rescan(); // recomputa checked/flagged solo sobre lo que SI se ofrece (flagged -> 0)
   }
 
   return { ok: true, model, elapsedMs: Date.now() - t0,
     brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win },
-    compliance: { checked, flagged, repaired, maxChars: SMS_MAX_CHARS,
-      note: "Word/format rules are enforced here, but cold MCA/debt-restructuring outbound is a category formally prohibited by T-Mobile/Twilio/TCR: deliverability depends on number reputation, consent and rotation, not just the copy." },
+    compliance: { checked, flagged, removed, repaired, repairPasses, maxChars: SMS_MAX_CHARS,
+      note: "Only messages that pass every hardcoded rule are offered — any that couldn't be repaired in " + MAX_REPAIR_PASSES + " passes are dropped, not shown. Even so, cold MCA/debt-restructuring outbound is a category formally prohibited by T-Mobile/Twilio/TCR: deliverability depends on number reputation, consent and rotation, not just the copy." },
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
 }
 
-// ---- INSIGHTS con IA: lectura masticada de los mejores/peores (on-demand) -----
-// Toma los insights deterministas del snapshot y pide a la IA un resumen accionable.
-async function insightAi(cfg: Record<string, string>, win: string) {
-  const akey = (cfg.anthropic_api_key || "").trim();
-  if (!akey) return { error: "Missing 'anthropic_api_key' in sms_analytics.config." };
-  const model = GEN_MODEL;
-  const snap = await withDb(async (c) => {
-    const q = await c.queryObject<{ data: any }>("select data from sms_analytics.snapshots_v2 order by id desc limit 1");
-    return q.rows[0] ? q.rows[0].data : null;
-  });
-  const w = snap && snap.windows && snap.windows[win];
-  const ins = w && w.insights;
-  if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length)))
-    return { error: "No insights yet — run a build with data first." };
+// ---- INSIGHTS con IA: análisis escrito de los mejores/peores mensajes -----
+// Helper reutilizable: recibe los insights deterministas (replicate/remove) y pide a la IA
+// una lectura accionable. Lo usan (a) build(), que lo HORNEA en el snapshot para servirlo
+// ABIERTO sin clave, y (b) la acción on-demand insight_ai. Best-effort + timeout duro: si
+// Anthropic falla o tarda, devuelve {error} y el llamador sigue sin romperse.
+async function aiInsightNarrative(
+  akey: string, win: string, replicate: any[], remove: any[],
+): Promise<{ narrative?: string; error?: string; elapsedMs?: number }> {
   const sys = [
     "You are a sharp growth analyst for outbound SMS in MCA debt-restructuring.",
     "You get the BEST and WORST performing messages (with response, live-transfer and opt-out rates).",
@@ -974,21 +1005,42 @@ async function insightAi(cfg: Record<string, string>, win: string) {
     "2) What to kill and exactly why (name the metric that condemns it).",
     "Be concrete and punchy. Reference the sms# and sequence. Do not just restate the raw numbers.",
   ].join("\n");
-  const user = "WINDOW: " + win + "d\n\nREPLICATE (winners):\n" + JSON.stringify(ins.replicate) +
-    "\n\nREMOVE (losers):\n" + JSON.stringify(ins.remove);
+  const user = "WINDOW: " + win + "d\n\nREPLICATE (winners):\n" + JSON.stringify(replicate) +
+    "\n\nREMOVE (losers):\n" + JSON.stringify(remove);
   const t0 = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
   let r: Response;
   try {
     r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 600, system: sys, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 600, system: sys, messages: [{ role: "user", content: user }] }),
+      signal: ctrl.signal,
     });
-  } catch (e) { return { error: "fetch a Anthropic fallo: " + String(e) }; }
+  } catch (e) { clearTimeout(timer); return { error: "fetch a Anthropic fallo: " + String(e) }; }
+  clearTimeout(timer);
   if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 300) };
   const j = await r.json();
   const narrative = (j.content || []).map((b: any) => b.text || "").join("").trim();
-  return { ok: true, win, model, elapsedMs: Date.now() - t0, narrative,
+  return { narrative, elapsedMs: Date.now() - t0 };
+}
+
+// Acción on-demand: lee los insights del último snapshot y devuelve el análisis IA en vivo.
+async function insightAi(cfg: Record<string, string>, win: string) {
+  const akey = (cfg.anthropic_api_key || "").trim();
+  if (!akey) return { error: "Missing 'anthropic_api_key' in sms_analytics.config." };
+  const snap = await withDb(async (c) => {
+    const q = await c.queryObject<{ data: any }>("select data from sms_analytics.snapshots_v2 order by id desc limit 1");
+    return q.rows[0] ? q.rows[0].data : null;
+  });
+  const w = snap && snap.windows && snap.windows[win];
+  const ins = w && w.insights;
+  if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length)))
+    return { error: "No insights yet — run a build with data first." };
+  const a = await aiInsightNarrative(akey, win, ins.replicate || [], ins.remove || []);
+  if (a.error) return { error: a.error };
+  return { ok: true, win, model: GEN_MODEL, elapsedMs: a.elapsedMs, narrative: a.narrative,
     counts: { replicate: (ins.replicate || []).length, remove: (ins.remove || []).length } };
 }
 
@@ -1025,10 +1077,10 @@ Deno.serve(async (req) => {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
       // Al drenar todo: marca won fresco y recien ahi construye (flujo semanal automatico).
-      if (r.remaining === 0) { await markwon(cfg); const b = await build(); return json({ ...r, built: true, generatedAt: b.generatedAt }); }
+      if (r.remaining === 0) { await markwon(cfg); const b = await build(cfg); return json({ ...r, built: true, generatedAt: b.generatedAt }); }
       return json(r);
     }
-    if (action === "build") return json(await build());
+    if (action === "build") return json(await build(cfg));
     if (action === "status") return json(await status());
     if (action === "data") {
       const r = await withDb(async (c) => {
