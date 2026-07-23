@@ -1022,12 +1022,13 @@ async function aiFindings(
     "You are a senior outbound-SMS strategist auditing an MCA debt-restructuring campaign.",
     "You receive the BEST and WORST performing messages of the sequences, each with its",
     "response, live-transfer and opt-out rates.",
-    "Write ONE cohesive GLOBAL analysis in plain prose — NOT a per-message list, NOT bullet points.",
-    "Step back and read the whole picture: the overarching pattern that separates what converts from",
-    "what doesn't, the main lever to pull, and the single biggest risk. You may cite a sequence or an",
-    "sms# as evidence, but frame it as an overall read, never a message-by-message breakdown.",
-    "Rules: 110-170 words, 1-2 short paragraphs, no headers, no markdown, no JSON.",
-    "End with one clear, actionable recommendation. Return ONLY the prose text, no preamble.",
+    "Write ONE sharp, intelligent GLOBAL read in plain prose — NOT a per-message list, NOT bullets.",
+    "Cover two things clearly: (1) the STRENGTHS — what's working and WHY it converts; (2) the",
+    "WEAKNESSES — what's dragging results and WHY. Step back to the overall pattern; you may cite a",
+    "sequence or sms# as evidence, but never do a message-by-message breakdown.",
+    "Then end with ONE short recommendation: a single sentence, max 18 words, concrete and actionable.",
+    "Be insightful and non-obvious — draw the reusable rule, don't just restate numbers.",
+    "Rules: 80-120 words total, no headers, no markdown, no JSON. Return ONLY the prose text, no preamble.",
   ].join("\n");
   const user = "WINDOW: " + win + "d\n\nBEST (replicate):\n" + JSON.stringify(replicate) +
     "\n\nWORST (remove):\n" + JSON.stringify(remove);

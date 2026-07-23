@@ -125,7 +125,7 @@ tbody tr:hover{background:var(--surface)}
 .bp-field{display:flex;flex-direction:column}
 .bp-label{font-size:15px;font-weight:600;color:var(--foreground);letter-spacing:-.015em;margin-bottom:9px;display:flex;align-items:baseline;gap:8px}
 .bp-label .n{font-family:var(--font-mono);font-size:11px;font-weight:500;color:var(--muted-2)}
-.bp-box{border:1px solid rgba(0,0,0,.05);border-radius:var(--radius);background:rgba(254,248,212,.6);padding:18px 20px;flex:1}
+.bp-box{border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(180deg,var(--card),var(--surface));padding:18px 20px;flex:1}
 .bp-line{font-size:14px;line-height:1.55;color:var(--foreground);margin:0 0 14px}
 .bp-line:last-child{margin-bottom:0}
 .bp-line b{font-weight:600;color:var(--foreground)}
@@ -187,7 +187,11 @@ tbody tr:hover{background:var(--surface)}
 .ai-badge{display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:var(--accent-fg);font-size:12px;font-weight:600;letter-spacing:.02em;padding:6px 13px;border-radius:999px}
 .ai-badge .spark{font-size:12px;line-height:1}
 .ai-sub{font-size:13px;color:var(--muted);margin-top:11px;line-height:1.5}
-.ai-narr{margin:16px 24px 4px;background:var(--highlight);border:1px solid rgba(0,0,0,.06);border-radius:var(--radius);padding:16px 18px;font-size:14.5px;line-height:1.62;color:var(--foreground);white-space:pre-wrap}
+.ai-narr{margin:16px 24px 22px;background:linear-gradient(180deg,var(--card),var(--surface));border:1px solid var(--border);border-radius:var(--radius);padding:14px 20px 17px}
+.ai-narr-tag{display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--muted-2);margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border-side)}
+.ai-narr-tag .spark{color:var(--foreground);font-size:12px;letter-spacing:0}
+.ai-narr-tag .upd{margin-left:auto;letter-spacing:.06em;font-weight:500;color:var(--muted-2)}
+.ai-narr-body{font-size:14.5px;line-height:1.64;color:var(--foreground);white-space:pre-wrap}
 .ai-narr .by{display:block;margin-top:11px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
 .ai-narr-empty{margin:16px 24px 4px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px}
 .ai-narr-empty .t{font-size:13px;color:var(--muted);line-height:1.5;flex:1;min-width:220px}
@@ -495,7 +499,7 @@ function aiInside(){
   var host=document.getElementById("aiInside"); if(!host) return;
   var w=W(), ins=w&&w.insights;
   var best=(ins&&ins.replicate)||[], worst=(ins&&ins.remove)||[];
-  var head='<div class="ai-head"><span class="ai-badge"><span class="spark">✦</span> AI Inside</span>'
+  var head='<div class="ai-head"><span class="ai-badge">AI Inside</span>'
     +'<div class="ai-sub">A global read of your outbound performance · '+ST.win+'-day window</div></div>';
   if(!best.length&&!worst.length){
     host.innerHTML='<div class="ai-panel">'+head
@@ -505,13 +509,15 @@ function aiInside(){
   // Un solo texto de análisis global. Fuente en orden: horneado en el snapshot (abierto) > cache de sesion (boton).
   // Si el dato viejo trae findings (lista), se colapsan en un solo texto hasta que se re-hornee la narrativa.
   var baked=ins&&ins.ai, cached=AI_READ_CACHE[ST.win], src=baked||cached, narr='';
-  var stamp=(baked&&baked.at)?' · updated '+ago(baked.at)+' ago':((cached&&!baked)?' · this session':'');
+  var upd=(baked&&baked.at)?('updated '+ago(baked.at)+' ago'):((cached&&!baked)?'this session':'');
   var txt=src&&(src.narrative||((src.findings&&src.findings.length)?src.findings.map(function(f){return (f.title||'')+(f.detail?' — '+f.detail:'');}).join('\n\n'):''));
   if(txt){
-    narr='<div class="ai-narr">'+esc(txt)+'<span class="by">✦ Analyzed by AI'+stamp+'</span></div>';
+    narr='<div class="ai-narr"><div class="ai-narr-tag">AI analysis'
+      +(upd?'<span class="upd">'+esc(upd)+'</span>':'')+'</div>'
+      +'<div class="ai-narr-body">'+esc(txt)+'</div></div>';
   } else {
     narr='<div class="ai-narr-empty"><div class="t">Have AI read your best- and worst-performing messages and hand back a single global analysis — what\'s working, what isn\'t, and the one change to make.</div>'
-      +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">✦ Get analysis</button></div>';
+      +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">Get analysis</button></div>';
   }
   host.innerHTML='<div class="ai-panel">'+head+narr+'</div>';
 }
@@ -520,11 +526,11 @@ function aiRead(){
   fetch(EP+"?action=insight_ai&win="+ST.win+opParam())
     .then(function(r){return r.json()})
     .then(function(d){
-      if(opFail(d)){ if(b){b.textContent='✦ Get analysis';b.disabled=false;} return; }
-      if(d.error){ if(b){b.textContent='✦ Get analysis';b.disabled=false;} alert(d.error); return; }
+      if(opFail(d)){ if(b){b.textContent='Get analysis';b.disabled=false;} return; }
+      if(d.error){ if(b){b.textContent='Get analysis';b.disabled=false;} alert(d.error); return; }
       AI_READ_CACHE[ST.win]={findings:d.findings||null, narrative:d.narrative||null}; aiInside();
     })
-    .catch(function(){ if(b){b.textContent='✦ Get analysis';b.disabled=false;} });
+    .catch(function(){ if(b){b.textContent='Get analysis';b.disabled=false;} });
 }
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
   return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}
