@@ -558,8 +558,9 @@ async function build(cfg?: Record<string, string>) {
         if (!e.canon && r.pos < e.pos) e.pos = r.pos;
       }
       const msgsByWf: Record<string, any[]> = {};
+      const maxPos: Record<string, number> = { cc: 15, cold: 8, defdec: 30 };
       for (const wf of Object.keys(agg)) {
-        msgsByWf[wf] = Object.values(agg[wf]).map((e: any) => ({
+        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) => e.pos <= (maxPos[wf] || 50)).map((e: any) => ({
           tmpl: e.tmpl, pos: e.pos, branch: e.branch, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
           replyRate: e.sends ? Math.round(1000 * e.replies / e.sends) / 10 : 0,
           ltRate: e.sends ? Math.round(10000 * e.lts / e.sends) / 100 : 0,
