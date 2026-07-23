@@ -499,10 +499,8 @@ function aiInside(){
   var host=document.getElementById("aiInside"); if(!host) return;
   var w=W(), ins=w&&w.insights;
   var best=(ins&&ins.replicate)||[], worst=(ins&&ins.remove)||[];
-  var head='<div class="ai-head"><span class="ai-badge">AI Inside</span>'
-    +'<div class="ai-sub">A global read of your outbound performance · '+ST.win+'-day window</div></div>';
   if(!best.length&&!worst.length){
-    host.innerHTML='<div class="ai-panel">'+head
+    host.innerHTML='<div class="ai-panel">'
       +'<div class="ai-narr-empty" style="margin-bottom:20px"><div class="t">No message-level signal in this window yet — it appears once messages reach '+((ins&&ins.minSends)||10)+'+ sends. Try the 30-day window.</div></div></div>';
     return;
   }
@@ -519,7 +517,7 @@ function aiInside(){
     narr='<div class="ai-narr-empty"><div class="t">Have AI read your best- and worst-performing messages and hand back a single global analysis — what\'s working, what isn\'t, and the one change to make.</div>'
       +'<button class="ai-genbtn" id="aiGenBtn" onclick="aiRead()">Get analysis</button></div>';
   }
-  host.innerHTML='<div class="ai-panel">'+head+narr+'</div>';
+  host.innerHTML='<div class="ai-panel">'+narr+'</div>';
 }
 function aiRead(){
   var b=document.getElementById('aiGenBtn'); if(b){b.textContent='Analyzing…';b.disabled=true;}
