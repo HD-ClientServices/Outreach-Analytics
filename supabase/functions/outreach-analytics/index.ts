@@ -1083,7 +1083,7 @@ Deno.serve(async (req) => {
   // Las acciones que MUTAN la base o gastan API (GHL/Anthropic) exigen la clave de operador
   // (cfg.dash_token). El dashboard la pide aparte y la manda por ?token= solo en esas llamadas;
   // nunca vive en la URL de la pagina. Los crons ya mandan el token, siguen andando igual.
-  const OPERATOR = new Set(["seed", "refresh", "markwon", "work", "build", "generate", "insight_ai"]);
+  const OPERATOR = new Set(["seed", "refresh", "markwon", "work", "build", "insight_ai"]);
   if (OPERATOR.has(action || "") && token !== cfg.dash_token) return json({ error: "operator_key_required" }, 401);
 
   try {
