@@ -559,7 +559,7 @@ async function build(cfg?: Record<string, string>) {
       }
       const msgsByWf: Record<string, any[]> = {};
       for (const wf of Object.keys(agg)) {
-        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) => e.sends >= 5).map((e: any) => ({
+        msgsByWf[wf] = Object.values(agg[wf]).map((e: any) => ({
           tmpl: e.tmpl, pos: e.pos, branch: e.branch, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
           replyRate: e.sends ? Math.round(1000 * e.replies / e.sends) / 10 : 0,
           ltRate: e.sends ? Math.round(10000 * e.lts / e.sends) / 100 : 0,
