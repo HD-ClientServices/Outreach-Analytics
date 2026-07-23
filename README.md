@@ -188,3 +188,4 @@ Modelo de acceso (rediseñado 21/07/2026 — el token salió de la URL del dashb
   Nunca en el código ni en el repo. Ningún endpoint las devuelve al cliente.
 - Si el link se filtra: rotar `cfg.dash_token` (corta a los operadores) y/o mover el sitio a un
   subdominio nuevo. Para privacidad real haría falta un login (no implementado, fue decisión).
+# Rebuilt
