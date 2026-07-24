@@ -102,6 +102,17 @@ const DEFDEC_POS: Record<string, number> = {};
   if (sk.length >= 4 && DEFDEC_POS_BY_IDX[i] != null) DEFDEC_POS[sk] = DEFDEC_POS_BY_IDX[i];
 });
 
+// cc y cold son cadencias lineales: el paso de diseño ES el índice en OFFICIAL
+// (1-based). Igual que defdec, usamos posición CANÓNICA y no el pos de envío
+// crudo — ese pos cuenta TODOS los SMS salientes de la conversación, así que
+// cuando un contacto acumula muchos (re-entradas, otros toques) los últimos
+// mensajes de cc saltan a 28/29 en vez de mostrar su paso real (…13, 14).
+// CANON_POS unifica las tres secuencias.
+const CANON_POS: Record<string, Record<string, number>> = { defdec: DEFDEC_POS, cc: {}, cold: {} };
+for (const wf of ["cc", "cold"]) {
+  (OFFICIAL[wf] || []).forEach((m, i) => { const sk = skel(m); if (sk.length >= 4) CANON_POS[wf][sk] = i + 1; });
+}
+
 function dbClient() { return new Client(Deno.env.get("SUPABASE_DB_URL")!); }
 async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const c = dbClient(); await c.connect();
@@ -550,7 +561,7 @@ async function build(cfg?: Record<string, string>) {
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
         if (!text) continue;
         const br = r.br || "-";
-        const canonPos = r.wf === "defdec" ? DEFDEC_POS[sk] : undefined;
+        const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const gk = sk + "¦" + br;
         const e = g[gk] || (g[gk] = { tmpl: text, pos: (canonPos != null ? canonPos : r.pos), branch: br, canon: canonPos != null, sends: 0, replies: 0, lts: 0, dnds: 0 });
@@ -558,9 +569,12 @@ async function build(cfg?: Record<string, string>) {
         if (!e.canon && r.pos < e.pos) e.pos = r.pos;
       }
       const msgsByWf: Record<string, any[]> = {};
-      const maxPos: Record<string, number> = { cc: 15, cold: 8, defdec: 30 };
       for (const wf of Object.keys(agg)) {
-        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) => e.pos <= (maxPos[wf] || 50)).map((e: any) => ({
+        // Con posición canónica (cc/cold/defdec) el 28/29 queda resuelto de raíz,
+        // así que ya NO usamos un tope por secuencia (escondía mensajes reales y
+        // era una trampa si la cadencia crecía). Solo descartamos entradas SIN
+        // posición canónica cuyo pos crudo sea absurdo (>50), como guard defensivo.
+        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) => e.canon || e.pos <= 50).map((e: any) => ({
           tmpl: e.tmpl, pos: e.pos, branch: e.branch, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
           replyRate: e.sends ? Math.round(1000 * e.replies / e.sends) / 10 : 0,
           ltRate: e.sends ? Math.round(10000 * e.lts / e.sends) / 100 : 0,
