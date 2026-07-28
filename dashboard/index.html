@@ -582,9 +582,11 @@ function loadData(){
     })
     .catch(function(e){if(!DATA)document.getElementById("app").innerHTML='<div class="note">Error loading data: '+esc(String(e))+'</div>'});
 }
-// Cache: pinta al instante lo ultimo guardado y refresca en segundo plano (sin "Loading…").
+// Cache: pinta al instante lo ultimo guardado y refresca en segundo plano (sin bloquear).
+// 1. Mostrar caché al instante (renderizado inmediato)
 try{var _c=localStorage.getItem("oa_data");if(_c){DATA=JSON.parse(_c);render();}}catch(e){}
-loadData();
+// 2. Actualizar en background (sin bloquear UI, solo si cambió)
+setTimeout(function(){loadData();},100);
 
 // Boton de refresh: dispara la actualizacion on-demand y muestra el progreso hasta reconstruir.
 var _pollT=null, _refOK=false;
