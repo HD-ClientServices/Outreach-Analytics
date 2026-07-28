@@ -7,6 +7,13 @@ const WINDOW_DAYS = 30;
 const GEN_MODEL = "claude-sonnet-5";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Workflow IDs (dinámicos desde GHL)
+const WORKFLOW_IDS: Record<string, string> = {
+  cc: "e28be9d2-ce89-4b6f-b85a-494d08912e58",
+  cold: "b985c65c-a0c3-4cdc-a737-7da93b77e933",
+  defdec: "69533301-b2f3-445e-8ebe-3f2227ba8c8e",
+};
+
 // ---- Las 3 secuencias (dinámicas desde Supabase) ----
 // Se cargan desde DB en lugar de estar hardcodeadas.
 // Esto permite que cambios en los nombres de workflows en GHL se reflejen automáticamente.
@@ -51,6 +58,15 @@ async function loadWorkflows() {
   }
 }
 
+async function initMessageCache(cfg: Record<string, string>) {
+  try {
+    const key = cfg.ghl_api_key;
+    await Promise.all(["cc", "cold", "defdec"].map(seq => getWorkflowMessages(seq, key)));
+  } catch (_) {
+    // Fallback silencioso a OFFICIAL si falla
+  }
+}
+
 async function getSequenceFromGHLTags(contactId: string, key: string): Promise<string> {
   try {
     const url = BASE + "/contacts/" + contactId;
@@ -64,6 +80,29 @@ async function getSequenceFromGHLTags(contactId: string, key: string): Promise<s
     return "none";
   } catch (_) {
     return "none";
+  }
+}
+
+async function getWorkflowMessages(sequence: string, key: string): Promise<string[]> {
+  try {
+    if (!WORKFLOW_IDS[sequence]) return OFFICIAL[sequence] || [];
+    const workflowId = WORKFLOW_IDS[sequence];
+    const url = BASE + "/workflows/" + workflowId;
+    const data = await gget(url, key);
+    const actions = data?.actions || [];
+    const messages: string[] = [];
+    for (const action of actions) {
+      if ((action.type === "send_sms" || action.actionType === "send_sms") && action.data?.message) {
+        let msg = action.data.message;
+        msg = msg.replace(/\{\{contact\.first_name\}\}/g, "{nombre}");
+        msg = msg.replace(/\{\{contact\.credit_card_debt\}\}/g, "{monto}");
+        msg = msg.replace(/\{\{user\.name\}\}/g, "{opener}");
+        messages.push(msg);
+      }
+    }
+    return messages.length ? messages : OFFICIAL[sequence] || [];
+  } catch (_) {
+    return OFFICIAL[sequence] || [];
   }
 }
 
@@ -132,6 +171,30 @@ const OFFICIAL: Record<string, string[]> = {
 function skel(t: string): string {
   return (t || "").toLowerCase().replace(/\{+[^{}]*\}+/g, "v").replace(/[^a-z0-9]/g, "");
 }
+
+// Caché dinámico de mensajes por secuencia
+const MESSAGES_CACHE: Record<string, string[]> = {};
+async function getCachedMessages(sequence: string, key: string): Promise<string[]> {
+  if (!MESSAGES_CACHE[sequence]) {
+    MESSAGES_CACHE[sequence] = await getWorkflowMessages(sequence, key);
+  }
+  return MESSAGES_CACHE[sequence];
+}
+
+async function buildMessageKeys(sequence: string, key: string): Promise<{ keys: Set<string>; text: Record<string, string> }> {
+  const messages = await getCachedMessages(sequence, key);
+  const keys = new Set<string>();
+  const text: Record<string, string> = {};
+  for (const m of messages) {
+    const sk = skel(m);
+    if (sk.length >= 4) {
+      keys.add(sk);
+      text[sk] = m;
+    }
+  }
+  return { keys, text };
+}
+
 const OFFICIAL_KEYS: Record<string, Set<string>> = {};
 const OFF_TEXT: Record<string, Record<string, string>> = {};
 for (const k of Object.keys(OFFICIAL)) {
@@ -139,8 +202,6 @@ for (const k of Object.keys(OFFICIAL)) {
   OFF_TEXT[k] = {};
   for (const m of OFFICIAL[k]) {
     const sk = skel(m);
-    // Esqueleto de <4 chars = mensaje de un solo placeholder ({nombre}?): cajon
-    // de sastre que absorbe cualquier mensaje de una palabra. Se ignora.
     if (sk.length < 4) continue;
     OFFICIAL_KEYS[k].add(sk);
     OFF_TEXT[k][sk] = m;
@@ -1151,6 +1212,9 @@ Deno.serve(async (req) => {
 
   // Cargar workflows dinámicos desde Supabase (en lugar de hardcodeados)
   try { await loadWorkflows(); } catch (e) { console.warn("workflows load failed, using defaults:", e); }
+
+  // Inicializar caché de mensajes desde GHL (100% dinámico)
+  try { await initMessageCache(cfg); } catch (e) { console.warn("message cache init failed, using OFFICIAL:", e); }
 
   // AUTH: leer es abierto (el link de Netlify es la credencial privada; ver no gasta nada).
   // Las acciones que MUTAN la base o gastan API (GHL/Anthropic) exigen la clave de operador
