@@ -7,33 +7,53 @@ const WINDOW_DAYS = 30;
 const GEN_MODEL = "claude-sonnet-5";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// ---- Las 3 secuencias -------------------------------------------------------
-// GHL no manda workflowId en los mensajes. Se atribuye el CONTACTO por su
-// PRIMER SMS outbound comparado contra palabras clave de cada workflow.
-// Patrones más flexibles para tolerar cambios en el copy.
-const WF: { key: string; label: string; re: RegExp; keywords: string[] }[] = [
-  {
-    key: "cc",
-    label: "Partner CC · DebtMD v2",
-    re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
-    keywords: ["cc", "credit", "submission", "anna", "debtmd"]
-  },
-  {
-    key: "cold",
-    label: "V2 · BULK FUP COLD BLAST",
-    re: /improve.*payment|mca.*payment|quick call|open to.*call/i,
-    keywords: ["improve", "weekly", "payment", "mca", "call"]
-  },
-  {
-    key: "defdec",
-    label: "PARTNER · Defaults & Declined",
-    re: /default|declined|qualify.*mca|just got.*file|file received/i,
-    keywords: ["default", "declined", "qualify", "file", "defdec"]
-  },
-];
+// ---- Las 3 secuencias (dinámicas desde Supabase) ----
+// Se cargan desde DB en lugar de estar hardcodeadas.
+// Esto permite que cambios en los nombres de workflows en GHL se reflejen automáticamente.
+let WF: { key: string; label: string; re: RegExp; keywords: string[] }[] = [];
+
+async function loadWorkflows() {
+  try {
+    const rows = await withDb(async (c) => {
+      return await c.queryObject<{ key: string; label: string; keywords: string }>(
+        "select key,label,keywords from sms_analytics.workflows order by key"
+      );
+    });
+    WF = (rows.rows || []).map(r => ({
+      key: r.key,
+      label: r.label,
+      re: new RegExp(r.label, "i"),
+      keywords: (r.keywords || "").split(",").filter(k => k.trim())
+    }));
+    if (!WF.length) throw new Error("No workflows configured");
+  } catch (e) {
+    // Fallback a defaults si falla la carga desde DB
+    WF = [
+      {
+        key: "cc",
+        label: "Partner CC · DebtMD v2",
+        re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
+        keywords: ["cc", "credit", "submission", "anna", "debtmd"]
+      },
+      {
+        key: "cold",
+        label: "V2 · BULK FUP COLD BLAST",
+        re: /improve.*payment|mca.*payment|quick call|open to.*call/i,
+        keywords: ["improve", "weekly", "payment", "mca", "call"]
+      },
+      {
+        key: "defdec",
+        label: "PARTNER · Defaults & Declined",
+        re: /default|declined|qualify.*mca|just got.*file|file received/i,
+        keywords: ["default", "declined", "qualify", "file", "defdec"]
+      },
+    ];
+  }
+}
+
 function whichWorkflow(body?: string): string {
   const b = (body || "").toLowerCase();
-  // Primer intento: regex exacto
+  // Primer intento: regex con labels de workflows dinámicos
   for (const w of WF) if (w.re.test(b)) return w.key;
   // Fallback: buscar 2+ palabras clave de la secuencia
   for (const w of WF) {
@@ -1114,6 +1134,9 @@ Deno.serve(async (req) => {
 
   let cfg: Record<string, string>;
   try { cfg = await getConfig(); } catch (e) { return json({ error: "db/config: " + String(e) }, 500); }
+
+  // Cargar workflows dinámicos desde Supabase (en lugar de hardcodeados)
+  try { await loadWorkflows(); } catch (e) { console.warn("workflows load failed, using defaults:", e); }
 
   // AUTH: leer es abierto (el link de Netlify es la credencial privada; ver no gasta nada).
   // Las acciones que MUTAN la base o gastan API (GHL/Anthropic) exigen la clave de operador
