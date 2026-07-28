@@ -831,6 +831,8 @@ const BLOCKLIST: string[] = [
   "refinance", "refinancing", "refinanced", "refi",
   // -- Deuda --
   "debt", "debts", "debtor", "debtors", "indebted", "indebtedness",
+  // -- Financiero (payment/cost disparan filtros en MCA) --
+  "payment", "payments", "cost", "costs", "monthly payment", "weekly payment",
   // -- Relief / settlement / consolidation / forgiveness --
   "consolidate", "consolidates", "consolidated", "consolidating", "consolidation", "debt consolidation",
   "settle", "settles", "settled", "settling", "settlement", "settlements", "debt settlement",
@@ -891,9 +893,11 @@ const SUBSTITUTIONS: [string, string][] = [
   ["lender / lenders", "your positions / your current accounts"],
   ["debt", "balances / positions"],
   ["loan", "advance / funding"],
+  ["payment / payments", "weekly amount / what you owe each week"],
+  ["cost / costs", "weekly strain / amount"],
   ["consolidate", "restructure your positions"],
   ["settle / settlement", "resolve / restructure"],
-  ["forgiveness", "lower monthly payments"],
+  ["forgiveness", "lower your weekly amount"],
   ["get rid of", "restructure"],
   ["eliminate", "improve cash flow"],
   ["guaranteed / pre-approved", "you may qualify / pre-qualify"],
