@@ -572,20 +572,39 @@ function t2(){
       +'</tr>';
   }).join("")||'<tr><td colspan="9" class="nd" style="padding:20px">No messages with 5+ sends in this window.</td></tr>';
 }
+function updateTimestamp(){
+  try{localStorage.setItem("oa_last_update",String(Date.now()))}catch(e){}
+  updateStamp();
+}
+function updateStamp(){
+  var el=document.getElementById("stamp");if(!el)return;
+  var ts=Number(localStorage.getItem("oa_last_update")||0);
+  if(!ts){el.textContent="";return}
+  var ago=Math.round((Date.now()-ts)/1000);
+  var txt;
+  if(ago<60)txt="Updated just now";
+  else if(ago<3600)txt="Updated "+Math.round(ago/60)+"m ago";
+  else if(ago<86400)txt="Updated "+Math.round(ago/3600)+"h ago";
+  else txt="Updated "+Math.round(ago/86400)+"d ago";
+  el.textContent=txt;
+}
 function loadData(){
   return fetch(EP+"?action=data")
     .then(function(r){return r.json()})
     .then(function(d){
       if(d.error){document.getElementById("app").innerHTML='<div class="note">Error al cargar los datos. Reintentá en un momento.</div>';return}
       if(d.empty){if(!DATA)document.getElementById("app").innerHTML='<div class="note">No data yet: the extraction hasn\'t finished.</div>';return}
-      DATA=d;try{localStorage.setItem("oa_data",JSON.stringify(d))}catch(e){}render();
+      DATA=d;try{localStorage.setItem("oa_data",JSON.stringify(d))}catch(e){}updateTimestamp();render();
     })
     .catch(function(e){if(!DATA)document.getElementById("app").innerHTML='<div class="note">Error loading data: '+esc(String(e))+'</div>'});
 }
 // Cache: pinta al instante lo ultimo guardado y refresca en segundo plano (sin bloquear).
 // 1. Mostrar caché al instante (renderizado inmediato)
 try{var _c=localStorage.getItem("oa_data");if(_c){DATA=JSON.parse(_c);render();}}catch(e){}
-// 2. Actualizar en background (sin bloquear UI, solo si cambió)
+updateStamp(); // Mostrar el timestamp del último update
+// 2. Actualizar timestamp cada segundo (para que diga "2 min ago", "3 min ago", etc.)
+setInterval(updateStamp,1000);
+// 3. Actualizar en background (sin bloquear UI, solo si cambió)
 setTimeout(function(){loadData();},100);
 
 // Boton de refresh: dispara la actualizacion on-demand y muestra el progreso hasta reconstruir.
