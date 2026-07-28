@@ -895,6 +895,7 @@ const SUBSTITUTIONS: [string, string][] = [
   ["loan", "advance / funding"],
   ["payment / payments", "weekly amount / what you owe each week"],
   ["cost / costs", "weekly strain / amount"],
+  ["stacked", "juggling multiple / managing multiple"],
   ["consolidate", "restructure your positions"],
   ["settle / settlement", "resolve / restructure"],
   ["forgiveness", "lower your weekly amount"],
