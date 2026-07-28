@@ -51,11 +51,25 @@ async function loadWorkflows() {
   }
 }
 
+async function getSequenceFromGHLTags(contactId: string, key: string): Promise<string> {
+  try {
+    const url = BASE + "/contacts/" + contactId;
+    const data = await gget(url, key);
+    const tags = (data?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
+
+    if (tags.includes("secuencia bfcb")) return "cold";
+    if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) return "cc";
+    if (tags.includes("sent from partner")) return "defdec";
+
+    return "none";
+  } catch (_) {
+    return "none";
+  }
+}
+
 function whichWorkflow(body?: string): string {
   const b = (body || "").toLowerCase();
-  // Primer intento: regex con labels de workflows dinámicos
   for (const w of WF) if (w.re.test(b)) return w.key;
-  // Fallback: buscar 2+ palabras clave de la secuencia
   for (const w of WF) {
     const found = w.keywords.filter(kw => b.includes(kw)).length;
     if (found >= 2) return w.key;
@@ -422,7 +436,7 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
         .sort((a: any, b: any) => (a.dateAdded || "") < (b.dateAdded || "") ? -1 : 1);
 
       const firstOut = sms.find((m: any) => m.direction === "outbound");
-      const wf = whichWorkflow(firstOut?.body);
+      const wf = await getSequenceFromGHLTags(t.contact_id, key);
       const enteredAt = firstOut?.dateAdded || null;
 
       let fi = -1;
