@@ -9,15 +9,37 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---- Las 3 secuencias -------------------------------------------------------
 // GHL no manda workflowId en los mensajes. Se atribuye el CONTACTO por su
-// PRIMER SMS outbound comparado contra el SMS 1 de cada workflow.
-const WF: { key: string; label: string; re: RegExp }[] = [
-  { key: "cc", label: "Partner CC · DebtMD v2", re: /\bin cc\b|this is anna/i },
-  { key: "cold", label: "V2 · BULK FUP COLD BLAST", re: /improve your weekly payments|open to a quick call about your mca/i },
-  { key: "defdec", label: "PARTNER · Defaults & Declined", re: /default situation|qualify for an mca|just got your (mca )?file/i },
+// PRIMER SMS outbound comparado contra palabras clave de cada workflow.
+// Patrones más flexibles para tolerar cambios en el copy.
+const WF: { key: string; label: string; re: RegExp; keywords: string[] }[] = [
+  {
+    key: "cc",
+    label: "Partner CC · DebtMD v2",
+    re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
+    keywords: ["cc", "credit", "submission", "anna", "debtmd"]
+  },
+  {
+    key: "cold",
+    label: "V2 · BULK FUP COLD BLAST",
+    re: /improve.*payment|mca.*payment|quick call|open to.*call/i,
+    keywords: ["improve", "weekly", "payment", "mca", "call"]
+  },
+  {
+    key: "defdec",
+    label: "PARTNER · Defaults & Declined",
+    re: /default|declined|qualify.*mca|just got.*file|file received/i,
+    keywords: ["default", "declined", "qualify", "file", "defdec"]
+  },
 ];
 function whichWorkflow(body?: string): string {
-  const b = body || "";
+  const b = (body || "").toLowerCase();
+  // Primer intento: regex exacto
   for (const w of WF) if (w.re.test(b)) return w.key;
+  // Fallback: buscar 2+ palabras clave de la secuencia
+  for (const w of WF) {
+    const found = w.keywords.filter(kw => b.includes(kw)).length;
+    if (found >= 2) return w.key;
+  }
   return "none";
 }
 
