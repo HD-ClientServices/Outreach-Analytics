@@ -1220,12 +1220,10 @@ Deno.serve(async (req) => {
   // Inicializar caché de mensajes desde GHL (100% dinámico)
   try { await initMessageCache(cfg); } catch (e) { console.warn("message cache init failed, using OFFICIAL:", e); }
 
-  // AUTH: leer es abierto (el link de Netlify es la credencial privada; ver no gasta nada).
-  // Las acciones que MUTAN la base o gastan API (GHL/Anthropic) exigen la clave de operador
-  // (cfg.dash_token). El dashboard la pide aparte y la manda por ?token= solo en esas llamadas;
-  // nunca vive en la URL de la pagina. Los crons ya mandan el token, siguen andando igual.
-  const OPERATOR = new Set(["seed", "refresh", "markwon", "work", "build", "insight_ai"]);
-  if (OPERATOR.has(action || "") && token !== cfg.dash_token) return json({ error: "operator_key_required" }, 401);
+  // App ABIERTA: no hay clave de operador. Cualquiera con el link puede ejecutar TODAS las
+  // acciones (incluidas las que mutan la base o gastan API de GHL/Anthropic). El link es la
+  // unica barrera. Los crons siguen mandando ?token= pero ya no se valida; andan igual.
+  void token;
 
   try {
     if (action === "seed") return json(await seed(cfg));

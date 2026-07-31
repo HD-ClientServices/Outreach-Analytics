@@ -343,16 +343,11 @@ tbody tr:hover{background:var(--surface)}
 </div>
 <script>
 var EP="https://voivhkugeepawdxoubgx.supabase.co/functions/v1/outreach-analytics";
-// El link ya NO lleva token: ver (data/status/context) es abierto. Solo las acciones que gastan
-// API (refresh/generate/insight_ai) piden una clave de operador, una vez por sesion; queda en
-// sessionStorage y viaja solo en esas llamadas, nunca en la URL de la pagina.
-function opKey(){
-  var k=sessionStorage.getItem("oa_opkey")||"";
-  if(!k){ k=(prompt("Clave de operador (solo para refrescar datos o generar con IA):")||"").trim(); if(k) sessionStorage.setItem("oa_opkey",k); }
-  return k;
-}
-function opParam(){ return "&token="+encodeURIComponent(opKey()); }
-function opFail(d){ if(d&&d.error==="operator_key_required"){ sessionStorage.removeItem("oa_opkey"); alert("Clave de operador incorrecta. Probá de nuevo."); return true; } return false; }
+// App ABIERTA: cualquiera con el link puede usar todo (ver, refrescar, generar con IA).
+// Ya no hay clave de operador; estas funciones quedan como no-ops para no tocar los call sites.
+function opKey(){ return ""; }
+function opParam(){ return ""; }
+function opFail(d){ return false; }
 var DATA=null;
 var ORDER=["cc","cold","defdec"];
 var ST={win:30, tab:"cc", sort:"pos", metric:"reply"};
