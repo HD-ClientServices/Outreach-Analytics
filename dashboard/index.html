@@ -323,10 +323,6 @@ tbody tr:hover{background:var(--surface)}
       <label>Sequence goal</label>
       <textarea id="g_goal" rows="2" placeholder="e.g. cold outreach to stacked contractors who are current but drowning"></textarea>
     </div>
-    <div class="gfield gf-wide">
-      <label>Audience <span class="opt">(optional)</span></label>
-      <input id="g_aud" type="text" placeholder="e.g. trades/construction with a UCC lien blocking an SBA" />
-    </div>
     <div class="gfield">
       <label>Messages per sequence</label>
       <input id="g_msgs" type="number" min="3" max="12" value="6" />
@@ -373,7 +369,6 @@ function genRun(){
   var btn=document.getElementById("genBtn"), out=document.getElementById("genOut");
   var brief={
     goal:document.getElementById("g_goal").value.trim(),
-    audience:document.getElementById("g_aud").value.trim(),
     messages:parseInt(document.getElementById("g_msgs").value)||6,
     variants:1,
     lang:"English",
