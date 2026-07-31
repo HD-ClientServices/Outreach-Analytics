@@ -386,7 +386,9 @@ function genRun(){
 function genRender(d){
   var out=document.getElementById("genOut"), res=d.result;
   if(!res||!res.variants){
-    out.innerHTML='<div class="gen-err">The AI didn\'t return valid JSON.<pre>'+esc(d.raw||"(empty)")+'</pre></div>'; return;
+    var reason = d.diag ? esc(d.diag) : 'The AI didn\'t return valid JSON.';
+    var rawBlock = d.raw ? '<pre>'+esc(d.raw)+'</pre>' : '';
+    out.innerHTML='<div class="gen-err"><b>Error:</b> '+reason+rawBlock+'</div>'; return;
   }
   var H='<div class="sub gen-note">'+res.variants.length+' variant(s) · model '+esc(d.model||"")+' · '+Math.round((d.elapsedMs||0)/1000)+'s'+(d.usage&&d.usage.output_tokens?(' · '+d.usage.output_tokens+' tokens'):'')+'</div>';
   if(d.compliance){var cf=d.compliance.flagged||0,cc=d.compliance.checked||0,cr=d.compliance.removed||0;

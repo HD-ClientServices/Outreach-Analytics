@@ -1041,11 +1041,16 @@ async function generate(cfg: Record<string, string>, body: any) {
     r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 8000, system: sys, messages: [{ role: "user", content: user }] }),
+      // OJO: en la API de Anthropic max_tokens ACOTA razonamiento + salida juntos.
+      // GEN_MODEL (sonnet-5) usa "adaptive thinking" por defecto; con 8000 el thinking
+      // se comía el presupuesto y el JSON salía vacío ("empty"). 16000 deja aire de sobra.
+      body: JSON.stringify({ model, max_tokens: 16000, system: sys, messages: [{ role: "user", content: user }] }),
     });
   } catch (e) { return { error: "Anthropic fetch failed: " + String(e) }; }
   if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 400) };
   const j = await r.json();
+  const stopReason = String(j.stop_reason || "");
+  const thinkTok = (j.usage && j.usage.output_tokens_details && j.usage.output_tokens_details.thinking_tokens) || 0;
   const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
   let parsed: any = null;
   try { parsed = JSON.parse(text.replace(/^```(json)?\s*/i, "").replace(/\s*```$/i, "").trim()); } catch (_) { /* keep raw */ }
@@ -1082,7 +1087,8 @@ async function generate(cfg: Record<string, string>, body: any) {
       const rr = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model, max_tokens: 2000, system: rsys, messages: [{ role: "user", content: "Rewrite each to fix its violations:\n" + JSON.stringify(bad) }] }),
+        // max_tokens acota thinking + salida; 2000 se quedaba corto y la reparación salía vacía.
+        body: JSON.stringify({ model, max_tokens: 8000, system: rsys, messages: [{ role: "user", content: "Rewrite each to fix its violations:\n" + JSON.stringify(bad) }] }),
       });
       if (rr.ok) {
         const rj = await rr.json();
@@ -1119,11 +1125,18 @@ async function generate(cfg: Record<string, string>, body: any) {
     if (removed) rescan(); // recomputa checked/flagged solo sobre lo que SI se ofrece (flagged -> 0)
   }
 
-  return { ok: true, model, elapsedMs: Date.now() - t0,
+  // Diagnóstico legible cuando NO hubo JSON válido: decimos EXACTAMENTE qué falló.
+  const diag = parsed ? undefined :
+    (stopReason === "max_tokens"
+      ? "El modelo cortó por límite de tokens (stop_reason=max_tokens): usó " + thinkTok + " tokens de razonamiento y no le quedó presupuesto para el JSON. Ya se subió max_tokens; si vuelve a pasar, subilo más o bajá variantes/mensajes."
+      : (!text
+          ? "El modelo no devolvió texto (stop_reason=" + (stopReason || "?") + ", " + thinkTok + " tokens de razonamiento). Probable corte por thinking/max_tokens."
+          : "El modelo devolvió texto que no es JSON válido (stop_reason=" + (stopReason || "?") + "). Ver el texto crudo abajo."));
+  return { ok: true, model, elapsedMs: Date.now() - t0, stop_reason: stopReason,
     brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win },
     compliance: { checked, flagged, removed, repaired, repairPasses, maxChars: SMS_MAX_CHARS,
       note: "Only messages that pass every hardcoded rule are offered — any that couldn't be repaired in " + MAX_REPAIR_PASSES + " passes are dropped, not shown. Even so, cold MCA/debt-restructuring outbound is a category formally prohibited by T-Mobile/Twilio/TCR: deliverability depends on number reputation, consent and rotation, not just the copy." },
-    usage: j.usage || null, result: parsed, raw: parsed ? undefined : text };
+    usage: j.usage || null, result: parsed, raw: parsed ? undefined : text, diag: diag };
 }
 
 // ---- INSIGHTS con IA: ANÁLISIS GLOBAL en prosa (un solo texto, NO lista mensaje-por-mensaje) --
@@ -1170,13 +1183,14 @@ async function aiFindings(
     "\n\nWORST (remove):\n" + JSON.stringify(remove);
   const t0 = Date.now();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 25000);
+  const timer = setTimeout(() => ctrl.abort(), 45000);
   let r: Response;
   try {
     r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 700, system: sys, messages: [{ role: "user", content: user }] }),
+      // max_tokens acota thinking + salida; 700 se lo comía el thinking y volvía narrativa vacía.
+      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 4000, system: sys, messages: [{ role: "user", content: user }] }),
       signal: ctrl.signal,
     });
   } catch (e) { clearTimeout(timer); return { error: "fetch a Anthropic fallo: " + String(e) }; }
