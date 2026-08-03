@@ -1341,6 +1341,16 @@ Deno.serve(async (req) => {
       });
       return json({ recentRows: r.rows, byWf: byWf.rows.map((x) => ({ wf: x.wf, n: Number(x.n), recent: Number(x.recent) })) });
     }
+    if (action === "reclassify_none") {
+      const days = url.searchParams.get("days") || "10";
+      const r = await withDb(async (c) => {
+        return await c.queryObject<{ n: bigint }>(
+          `update sms_analytics.cohort set done=false, attempts=0
+           where wf='none' and entered_at >= now() - ($1 || ' days')::interval
+           returning 1`, [days]);
+      });
+      return json({ marked: r.rows.length });
+    }
     if (action === "debug_tags") {
       const cid = url.searchParams.get("cid");
       if (!cid) return json({ error: "missing cid" }, 400);
