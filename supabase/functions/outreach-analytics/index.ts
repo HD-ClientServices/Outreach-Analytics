@@ -1313,6 +1313,18 @@ Deno.serve(async (req) => {
       });
       return json(r.rows.map((row) => ({ tmpl: row.tmpl, n: Number(row.n), sk: skel(row.tmpl), known: OFFICIAL_KEYS.cold.has(skel(row.tmpl)) })));
     }
+    if (action === "debug_recent") {
+      const r = await withDb(async (c) => {
+        return await c.queryObject<{ tmpl: string; pos: number; sent_at: string; contact_id: string }>(
+          `select t.tmpl, e.pos, e.sent_at::text, e.contact_id
+           from sms_analytics.msg_events e
+           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+           where e.wf = 'cold'
+           order by e.sent_at desc
+           limit 20`);
+      });
+      return json(r.rows);
+    }
     if (action === "data") {
       const r = await withDb(async (c) => {
         const q = await c.queryObject<{ data: any; created_at: string }>(
