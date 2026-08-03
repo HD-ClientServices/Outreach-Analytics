@@ -241,9 +241,18 @@ const DEFDEC_POS: Record<string, number> = {};
 // canónica 1-8 — la letra de rama (ver cbr en build()) es lo que las distingue.
 const COLD_POS_BY_IDX = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8];
 const COLD_POS: Record<string, number> = {};
+// Cada mensaje de cold pertenece EXCLUSIVAMENTE a una rama (a diferencia de
+// defdec, donde las posiciones tardías son compartidas entre ramas) — así que
+// la rama se deriva del propio texto del mensaje, no de la historia del
+// contacto. Evita que un contacto que arrancó en Path A pero luego recibió un
+// mensaje de "ab testing" (re-entrada al workflow, Split no siempre pegajoso)
+// quede con ese mensaje mal etiquetado bajo su rama original.
+const COLD_BRANCH_BY_IDX = ["A", "A", "A", "A", "A", "A", "A", "A", "B", "B", "B", "B", "B", "B", "B", "B"];
+const COLD_BRANCH: Record<string, string> = {};
 (OFFICIAL.cold || []).forEach((m, i) => {
   const sk = skel(m);
   if (sk.length >= 4 && COLD_POS_BY_IDX[i] != null) COLD_POS[sk] = COLD_POS_BY_IDX[i];
+  if (sk.length >= 4 && COLD_BRANCH_BY_IDX[i] != null) COLD_BRANCH[sk] = COLD_BRANCH_BY_IDX[i];
 });
 
 // CANON_POS unifica las tres secuencias.
@@ -663,9 +672,11 @@ async function build(cfg?: Record<string, string>) {
       const byWf: Record<string, { ing: number; lt: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
 
-      // Rama por contacto, según su 1er SMS: defdec A=Default/B=Declined; cold
-      // A="Path A" (guión original) / B="ab testing" (guión nuevo, mismo workflow,
-      // agregado como Split). El resto de las secuencias no se dividen (br='-').
+      // Rama por contacto según su 1er SMS: solo defdec (A=Default/B=Declined),
+      // porque sus posiciones tardías son mensajes compartidos entre ramas.
+      // cold deriva la rama del propio texto de CADA mensaje (ver COLD_BRANCH),
+      // no de la historia del contacto — sus 8 mensajes por rama son exclusivos.
+      // El resto de las secuencias no se dividen (br='-').
       const msgs = await c.queryObject<{ wf: string; br: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
         `with firstmsg as (
            select distinct on (e.contact_id) e.contact_id, t.tmpl
@@ -678,10 +689,6 @@ async function build(cfg?: Record<string, string>) {
              case when c.wf = 'defdec' then
                     case when fm.tmpl ~* 'default situation' then 'A'
                          when fm.tmpl ~* 'qualify for an mca'  then 'B'
-                         else '-' end
-                  when c.wf = 'cold' then
-                    case when fm.tmpl ~* 'stacked in multiple mca positions' then 'B'
-                         when fm.tmpl ~* 'improve your weekly payments' then 'A'
                          else '-' end
                   else '-' end as br
            from sms_analytics.cohort c
@@ -705,7 +712,7 @@ async function build(cfg?: Record<string, string>) {
         const sk = skel(r.tmpl);
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
         if (!text) continue;
-        const br = r.br || "-";
+        const br = (r.wf === "cold" ? COLD_BRANCH[sk] : null) || r.br || "-";
         const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const gk = sk + "¦" + br;
