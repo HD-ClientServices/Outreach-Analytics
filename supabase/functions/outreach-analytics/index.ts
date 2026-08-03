@@ -1317,7 +1317,7 @@ Deno.serve(async (req) => {
           if (tags.includes("secuencia partner mca")) tagCounts["secuencia partner mca"]++;
         } catch (_) { tagCounts.errors++; }
       }
-      return json({ defdecCohort: r.rows, sampleTagCounts: tagCounts });
+      return json({ defdecCohort: r.rows.map((x) => ({ wf: x.wf, n: Number(x.n), recent: Number(x.recent) })), sampleTagCounts: tagCounts });
     }
     if (action === "status") return json(await status());
     if (action === "data") {
