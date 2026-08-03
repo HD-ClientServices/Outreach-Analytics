@@ -682,14 +682,16 @@ async function build(cfg?: Record<string, string>) {
            select distinct on (e.contact_id) e.contact_id, t.tmpl
            from sms_analytics.msg_events e
            join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
-           where e.wf <> 'defdec' or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
+           where e.wf <> 'defdec'
+              or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
+              or t.tmpl ~* 'avoid colections' or t.tmpl ~* 'better option than an mca'
            order by e.contact_id, e.pos asc, e.sent_at asc
          ),
          cbr as (
            select c.contact_id,
              case when c.wf = 'defdec' then
-                    case when fm.tmpl ~* 'default situation' then 'A'
-                         when fm.tmpl ~* 'qualify for an mca'  then 'B'
+                    case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
+                         when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
                          else '-' end
                   else '-' end as br
            from sms_analytics.cohort c
@@ -1307,7 +1309,8 @@ Deno.serve(async (req) => {
              order by e.contact_id, e.pos asc, e.sent_at asc
            )
            select contact_id, tmpl, pos from anchor
-           where not (tmpl ~* 'default situation' or tmpl ~* 'qualify for an mca')
+           where not (tmpl ~* 'default situation' or tmpl ~* 'qualify for an mca'
+                      or tmpl ~* 'avoid colections' or tmpl ~* 'better option than an mca')
            limit 20`);
       });
       return json(r.rows);
