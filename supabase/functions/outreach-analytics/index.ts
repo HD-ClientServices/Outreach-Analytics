@@ -71,7 +71,7 @@ async function getSequenceFromGHLTags(contactId: string, key: string): Promise<s
   try {
     const url = BASE + "/contacts/" + contactId;
     const data = await gget(url, key);
-    const tags = (data?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
+    const tags = (data?.contact?.tags || data?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
 
     if (tags.includes("secuencia bfcb")) return "cold";
     if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) return "cc";
