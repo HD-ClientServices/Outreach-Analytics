@@ -1341,6 +1341,20 @@ Deno.serve(async (req) => {
       });
       return json({ recentRows: r.rows, byWf: byWf.rows.map((x) => ({ wf: x.wf, n: Number(x.n), recent: Number(x.recent) })) });
     }
+    if (action === "debug_tags") {
+      const cid = url.searchParams.get("cid");
+      if (!cid) return json({ error: "missing cid" }, 400);
+      const key = cfg.ghl_api_key;
+      const rawUrl = BASE + "/contacts/" + cid;
+      let status = 0, body: any = null, errMsg = null;
+      try {
+        const r = await fetch(rawUrl, { headers: { Authorization: "Bearer " + key, Version: VER } });
+        status = r.status;
+        body = await r.json();
+      } catch (e) { errMsg = String(e); }
+      const wf = await getSequenceFromGHLTags(cid, key);
+      return json({ status, tags: body?.contact?.tags ?? body?.tags ?? null, errMsg, resolvedWf: wf, hasKey: !!key, keyLen: (key || "").length });
+    }
     if (action === "data") {
       const r = await withDb(async (c) => {
         const q = await c.queryObject<{ data: any; created_at: string }>(
