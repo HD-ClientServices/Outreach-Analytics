@@ -1290,7 +1290,18 @@ Deno.serve(async (req) => {
     if (action === "build") return json(await build(cfg));
     if (action === "status") return json(await status());
     if (action === "debug_cold") {
+      const like = url.searchParams.get("like") || "";
       const r = await withDb(async (c) => {
+        if (like) {
+          return await c.queryObject<{ tmpl: string; n: bigint }>(
+            `select t.tmpl, count(*)::bigint as n
+             from sms_analytics.msg_events e
+             join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+             where t.tmpl ilike $1
+             group by t.tmpl
+             order by n desc
+             limit 60`, ["%" + like + "%"]);
+        }
         return await c.queryObject<{ tmpl: string; n: bigint }>(
           `select t.tmpl, count(*)::bigint as n
            from sms_analytics.msg_events e
