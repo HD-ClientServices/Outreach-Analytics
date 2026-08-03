@@ -1298,47 +1298,6 @@ Deno.serve(async (req) => {
       return json(r);
     }
     if (action === "build") return json(await build(cfg));
-    if (action === "debug_defdec_dash") {
-      const r = await withDb(async (c) => {
-        return await c.queryObject<{ contact_id: string; tmpl: string; pos: number }>(
-          `with anchor as (
-             select distinct on (e.contact_id) e.contact_id, t.tmpl, e.pos
-             from sms_analytics.msg_events e
-             join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
-             where e.wf = 'defdec'
-             order by e.contact_id, e.pos asc, e.sent_at asc
-           )
-           select contact_id, tmpl, pos from anchor
-           where not (tmpl ~* 'default situation' or tmpl ~* 'qualify for an mca'
-                      or tmpl ~* 'avoid colections' or tmpl ~* 'better option than an mca')
-           limit 20`);
-      });
-      return json(r.rows);
-    }
-    if (action === "debug_tagcount") {
-      const r = await withDb(async (c) => {
-        return await c.queryObject<{ wf: string; n: bigint; recent: bigint }>(
-          `select wf, count(*)::bigint as n,
-             count(*) filter (where entered_at >= now() - interval '10 days')::bigint as recent
-           from sms_analytics.cohort where wf = 'defdec' group by wf`);
-      });
-      const sample = await withDb(async (c) => {
-        return await c.queryObject<{ contact_id: string }>(
-          `select contact_id from sms_analytics.cohort where wf='defdec' order by entered_at desc nulls last limit 15`);
-      });
-      const key = cfg.ghl_api_key;
-      const tagCounts: Record<string, number> = { "sent from partner": 0, "secuencia partner mca": 0, checked: 0, errors: 0 };
-      for (const row of sample.rows) {
-        try {
-          const d = await gget(BASE + "/contacts/" + row.contact_id, key);
-          const tags = (d?.contact?.tags || d?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
-          tagCounts.checked++;
-          if (tags.includes("sent from partner")) tagCounts["sent from partner"]++;
-          if (tags.includes("secuencia partner mca")) tagCounts["secuencia partner mca"]++;
-        } catch (_) { tagCounts.errors++; }
-      }
-      return json({ defdecCohort: r.rows.map((x) => ({ wf: x.wf, n: Number(x.n), recent: Number(x.recent) })), sampleTagCounts: tagCounts });
-    }
     if (action === "status") return json(await status());
     if (action === "data") {
       const r = await withDb(async (c) => {
