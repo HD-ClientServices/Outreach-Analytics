@@ -75,7 +75,7 @@ async function getSequenceFromGHLTags(contactId: string, key: string): Promise<s
 
     if (tags.includes("secuencia bfcb")) return "cold";
     if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) return "cc";
-    if (tags.includes("secuencia partner mca")) return "defdec";
+    if (tags.includes("sent from partner")) return "defdec";
 
     return "none";
   } catch (_) {
@@ -682,6 +682,7 @@ async function build(cfg?: Record<string, string>) {
            select distinct on (e.contact_id) e.contact_id, t.tmpl
            from sms_analytics.msg_events e
            join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+           where e.wf <> 'defdec' or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
            order by e.contact_id, e.pos asc, e.sent_at asc
          ),
          cbr as (
