@@ -1289,6 +1289,19 @@ Deno.serve(async (req) => {
     }
     if (action === "build") return json(await build(cfg));
     if (action === "status") return json(await status());
+    if (action === "debug_cold") {
+      const r = await withDb(async (c) => {
+        return await c.queryObject<{ tmpl: string; n: bigint }>(
+          `select t.tmpl, count(*)::bigint as n
+           from sms_analytics.msg_events e
+           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+           where e.wf = 'cold'
+           group by t.tmpl
+           order by n desc
+           limit 40`);
+      });
+      return json(r.rows.map((row) => ({ tmpl: row.tmpl, n: Number(row.n), sk: skel(row.tmpl), known: OFFICIAL_KEYS.cold.has(skel(row.tmpl)) })));
+    }
     if (action === "data") {
       const r = await withDb(async (c) => {
         const q = await c.queryObject<{ data: any; created_at: string }>(
