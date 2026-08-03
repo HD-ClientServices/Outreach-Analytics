@@ -139,6 +139,7 @@ const OFFICIAL: Record<string, string[]> = {
     "Thanks, {nombre}! Whenever you're ready, just send me a message and we'll be happy to help.",
   ],
   cold: [
+    // Rama A = "Path A" (guión original)
     "Hi {nombre}, we may be able to improve your weekly payments. Open to a quick call about your MCAs? - {opener}",
     "Hi {nombre}, my intention is simply to support you and help you feel less alone with your MCAs. - {opener}",
     "Hi {nombre}, {opener} at Settlegroup, following up. We may be able to ease your payments quickly. Can I call you?",
@@ -147,6 +148,15 @@ const OFFICIAL: Record<string, string[]> = {
     "Hi {nombre}, I've seen how heavy MCA payments can become without guidance. I want to help early. Just reply. - {opener}",
     "{nombre}, I just want to make sure you have someone trustworthy to talk to. Just reply. - {opener}",
     "Final note, {nombre}: if a brief call could help ease your MCA payments, just reply. I'm here to help. - {opener}",
+    // Rama B = "ab testing" (guión nuevo, agregado como split dentro del mismo workflow)
+    "Hi {nombre}, this is {opener} with Settlegroup. We're aware you're stacked in multiple MCA positions. Can I call you now?",
+    "Just trying to help you avoid stress on your positions. Can I call you now? - {opener}",
+    "We have a better option than another advance. Can I call you now?",
+    "Btw we just got a great result for an owner like you, stacked just like your positions. Quick call to share it?",
+    "We help owners simplify what they pay each week, up to 70% lower. Can I call you?",
+    "Hi {nombre}, {opener} at Settlegroup. Attorney-led, no upfront charge. Want to get ahead of this? Call me now.",
+    "Any thoughts, {nombre}? We know your positions and can restructure into one lower weekly amount.",
+    "Final note, {nombre}: if a brief call could ease your weekly amount, just reply. I'm here to help. - {opener}",
   ],
   defdec: [
     "Hi {nombre}, just got your MCA file. We're aware of your default situation and we'd like to help you. Can I call you now? - {opener}",
@@ -219,14 +229,26 @@ const DEFDEC_POS: Record<string, number> = {};
   if (sk.length >= 4 && DEFDEC_POS_BY_IDX[i] != null) DEFDEC_POS[sk] = DEFDEC_POS_BY_IDX[i];
 });
 
-// cc y cold son cadencias lineales: el paso de diseño ES el índice en OFFICIAL
-// (1-based). Igual que defdec, usamos posición CANÓNICA y no el pos de envío
-// crudo — ese pos cuenta TODOS los SMS salientes de la conversación, así que
-// cuando un contacto acumula muchos (re-entradas, otros toques) los últimos
-// mensajes de cc saltan a 28/29 en vez de mostrar su paso real (…13, 14).
+// cc es una cadencia lineal: el paso de diseño ES el índice en OFFICIAL (1-based).
+// Igual que defdec, usamos posición CANÓNICA y no el pos de envío crudo — ese pos
+// cuenta TODOS los SMS salientes de la conversación, así que cuando un contacto
+// acumula muchos (re-entradas, otros toques) los últimos mensajes de cc saltan a
+// 28/29 en vez de mostrar su paso real (…13, 14).
+
+// cold tiene un Split dentro del MISMO workflow de GHL: rama A = "Path A" (guión
+// original, índices 0-7 de OFFICIAL.cold) y rama B = "ab testing" (guión nuevo,
+// índices 8-15). Ambas ramas son 8 pasos en paralelo, así que comparten posición
+// canónica 1-8 — la letra de rama (ver cbr en build()) es lo que las distingue.
+const COLD_POS_BY_IDX = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8];
+const COLD_POS: Record<string, number> = {};
+(OFFICIAL.cold || []).forEach((m, i) => {
+  const sk = skel(m);
+  if (sk.length >= 4 && COLD_POS_BY_IDX[i] != null) COLD_POS[sk] = COLD_POS_BY_IDX[i];
+});
+
 // CANON_POS unifica las tres secuencias.
-const CANON_POS: Record<string, Record<string, number>> = { defdec: DEFDEC_POS, cc: {}, cold: {} };
-for (const wf of ["cc", "cold"]) {
+const CANON_POS: Record<string, Record<string, number>> = { defdec: DEFDEC_POS, cc: {}, cold: COLD_POS };
+for (const wf of ["cc"]) {
   (OFFICIAL[wf] || []).forEach((m, i) => { const sk = skel(m); if (sk.length >= 4) CANON_POS[wf][sk] = i + 1; });
 }
 
@@ -641,8 +663,9 @@ async function build(cfg?: Record<string, string>) {
       const byWf: Record<string, { ing: number; lt: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
 
-      // Rama por contacto (solo defdec): A=Default / B=Declined, según su 1er SMS.
-      // El resto de las secuencias no se dividen (br='-'). Ver artifact de ramas.
+      // Rama por contacto, según su 1er SMS: defdec A=Default/B=Declined; cold
+      // A="Path A" (guión original) / B="ab testing" (guión nuevo, mismo workflow,
+      // agregado como Split). El resto de las secuencias no se dividen (br='-').
       const msgs = await c.queryObject<{ wf: string; br: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
         `with firstmsg as (
            select distinct on (e.contact_id) e.contact_id, t.tmpl
@@ -652,9 +675,14 @@ async function build(cfg?: Record<string, string>) {
          ),
          cbr as (
            select c.contact_id,
-             case when c.wf <> 'defdec' then '-'
-                  when fm.tmpl ~* 'default situation' then 'A'
-                  when fm.tmpl ~* 'qualify for an mca'  then 'B'
+             case when c.wf = 'defdec' then
+                    case when fm.tmpl ~* 'default situation' then 'A'
+                         when fm.tmpl ~* 'qualify for an mca'  then 'B'
+                         else '-' end
+                  when c.wf = 'cold' then
+                    case when fm.tmpl ~* 'stacked in multiple mca positions' then 'B'
+                         when fm.tmpl ~* 'improve your weekly payments' then 'A'
+                         else '-' end
                   else '-' end as br
            from sms_analytics.cohort c
            left join firstmsg fm on fm.contact_id = c.contact_id
