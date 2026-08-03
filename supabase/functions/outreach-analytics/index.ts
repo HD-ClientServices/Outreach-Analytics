@@ -75,7 +75,7 @@ async function getSequenceFromGHLTags(contactId: string, key: string): Promise<s
 
     if (tags.includes("secuencia bfcb")) return "cold";
     if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) return "cc";
-    if (tags.includes("sent from partner")) return "defdec";
+    if (tags.includes("secuencia partner mca")) return "defdec";
 
     return "none";
   } catch (_) {
@@ -1295,6 +1295,30 @@ Deno.serve(async (req) => {
       return json(r);
     }
     if (action === "build") return json(await build(cfg));
+    if (action === "debug_tagcount") {
+      const r = await withDb(async (c) => {
+        return await c.queryObject<{ wf: string; n: bigint; recent: bigint }>(
+          `select wf, count(*)::bigint as n,
+             count(*) filter (where entered_at >= now() - interval '10 days')::bigint as recent
+           from sms_analytics.cohort where wf = 'defdec' group by wf`);
+      });
+      const sample = await withDb(async (c) => {
+        return await c.queryObject<{ contact_id: string }>(
+          `select contact_id from sms_analytics.cohort where wf='defdec' order by entered_at desc nulls last limit 15`);
+      });
+      const key = cfg.ghl_api_key;
+      const tagCounts: Record<string, number> = { "sent from partner": 0, "secuencia partner mca": 0, checked: 0, errors: 0 };
+      for (const row of sample.rows) {
+        try {
+          const d = await gget(BASE + "/contacts/" + row.contact_id, key);
+          const tags = (d?.contact?.tags || d?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
+          tagCounts.checked++;
+          if (tags.includes("sent from partner")) tagCounts["sent from partner"]++;
+          if (tags.includes("secuencia partner mca")) tagCounts["secuencia partner mca"]++;
+        } catch (_) { tagCounts.errors++; }
+      }
+      return json({ defdecCohort: r.rows, sampleTagCounts: tagCounts });
+    }
     if (action === "status") return json(await status());
     if (action === "data") {
       const r = await withDb(async (c) => {
