@@ -1296,6 +1296,22 @@ Deno.serve(async (req) => {
       return json(r);
     }
     if (action === "build") return json(await build(cfg));
+    if (action === "debug_defdec_dash") {
+      const r = await withDb(async (c) => {
+        return await c.queryObject<{ contact_id: string; tmpl: string; pos: number }>(
+          `with anchor as (
+             select distinct on (e.contact_id) e.contact_id, t.tmpl, e.pos
+             from sms_analytics.msg_events e
+             join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+             where e.wf = 'defdec'
+             order by e.contact_id, e.pos asc, e.sent_at asc
+           )
+           select contact_id, tmpl, pos from anchor
+           where not (tmpl ~* 'default situation' or tmpl ~* 'qualify for an mca')
+           limit 20`);
+      });
+      return json(r.rows);
+    }
     if (action === "debug_tagcount") {
       const r = await withDb(async (c) => {
         return await c.queryObject<{ wf: string; n: bigint; recent: bigint }>(
