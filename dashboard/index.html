@@ -604,11 +604,9 @@ var _pollT=null, _refOK=false;
 function startRefresh(){
   var b=document.getElementById("refreshBtn");if(!b)return;
   var t0=Date.now();
-  var k=opKey();
-  if(!k){ b.classList.remove("on");b.style.pointerEvents="";b.textContent="↻ Refresh"; return; }
   b.classList.add("on");b.textContent="Refreshing…";b.style.pointerEvents="none";
   _refOK=true;
-  fetch(EP+"?action=refresh&token="+encodeURIComponent(k)).then(function(r){return r.json()}).then(function(d){
+  fetch(EP+"?action=refresh").then(function(r){return r.json()}).then(function(d){
     if(opFail(d)){ _refOK=false; clearTimeout(_pollT); b.classList.remove("on");b.style.pointerEvents="";b.textContent="↻ Refresh"; }
   }).catch(function(){});
   clearTimeout(_pollT);
