@@ -1325,6 +1325,22 @@ Deno.serve(async (req) => {
       });
       return json(r.rows);
     }
+    if (action === "debug_cohort") {
+      const r = await withDb(async (c) => {
+        return await c.queryObject<{ contact_id: string; wf: string; entered_at: string; done: boolean; replied: boolean }>(
+          `select contact_id, wf, entered_at::text, done, replied
+           from sms_analytics.cohort
+           order by entered_at desc nulls last
+           limit 25`);
+      });
+      const byWf = await withDb(async (c) => {
+        return await c.queryObject<{ wf: string; n: bigint; recent: bigint }>(
+          `select wf, count(*)::bigint as n,
+             count(*) filter (where entered_at >= now() - interval '5 days')::bigint as recent
+           from sms_analytics.cohort group by wf order by n desc`);
+      });
+      return json({ recentRows: r.rows, byWf: byWf.rows.map((x) => ({ wf: x.wf, n: Number(x.n), recent: Number(x.recent) })) });
+    }
     if (action === "data") {
       const r = await withDb(async (c) => {
         const q = await c.queryObject<{ data: any; created_at: string }>(
