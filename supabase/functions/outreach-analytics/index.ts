@@ -83,6 +83,29 @@ async function getSequenceFromGHLTags(contactId: string, key: string): Promise<s
   }
 }
 
+async function getSequenceAndBranchFromGHLTags(contactId: string, key: string): Promise<{sequence: string, branch: string}> {
+  try {
+    const url = BASE + "/contacts/" + contactId;
+    const data = await gget(url, key);
+    const tags = (data?.contact?.tags || data?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
+
+    let sequence = "none";
+    if (tags.includes("secuencia bfcb")) sequence = "cold";
+    else if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) sequence = "cc";
+    else if (tags.includes("sent from partner")) sequence = "defdec";
+
+    let branch = "-";
+    const branchTag = tags.find((t: string) => t.match(/^rama\s*[a-z]$/));
+    if (branchTag) {
+      branch = branchTag.split(/\s+/)[1] || "-";
+    }
+
+    return { sequence, branch };
+  } catch (_) {
+    return { sequence: "none", branch: "-" };
+  }
+}
+
 async function getWorkflowMessages(sequence: string, key: string): Promise<string[]> {
   try {
     if (!WORKFLOW_IDS[sequence]) return OFFICIAL[sequence] || [];
