@@ -75,7 +75,7 @@ async function getSequenceFromGHLTags(contactId: string, key: string): Promise<s
 
     if (tags.includes("secuencia bfcb")) return "cold";
     if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) return "cc";
-    if (tags.includes("sent from partner")) return "defdec";
+    if (tags.includes("secuencia partner mca")) return "defdec";
 
     return "none";
   } catch (_) {
