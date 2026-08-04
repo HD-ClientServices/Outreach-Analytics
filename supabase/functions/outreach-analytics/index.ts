@@ -267,16 +267,11 @@ const COLD_POS: Record<string, number> = {};
 // Cada mensaje de cold pertenece EXCLUSIVAMENTE a una rama (a diferencia de
 // defdec, donde las posiciones tardías son compartidas entre ramas) — así que
 // la rama se deriva del propio texto del mensaje, no de la historia del
-// contacto. Evita que un contacto que arrancó en Path A pero luego recibió un
-// mensaje de "ab testing" (re-entrada al workflow, Split no siempre pegajoso)
-// quede con ese mensaje mal etiquetado bajo su rama original.
-const COLD_BRANCH_BY_IDX = ["A", "A", "A", "A", "A", "A", "A", "A", "B", "B", "B", "B", "B", "B", "B", "B"];
-const COLD_BRANCH: Record<string, string> = {};
-(OFFICIAL.cold || []).forEach((m, i) => {
-  const sk = skel(m);
-  if (sk.length >= 4 && COLD_POS_BY_IDX[i] != null) COLD_POS[sk] = COLD_POS_BY_IDX[i];
-  if (sk.length >= 4 && COLD_BRANCH_BY_IDX[i] != null) COLD_BRANCH[sk] = COLD_BRANCH_BY_IDX[i];
-});
+// DEPRECATED: Branch detection moved to tag-based system (rama a, rama b, etc.)
+// Previously: Position-based detection (COLD_BRANCH_BY_IDX) for Cold Blast
+// Now: getSequenceAndBranchFromGHLTags() reads "rama X" tags from GHL
+// const COLD_BRANCH_BY_IDX = ["A", "A", "A", "A", "A", "A", "A", "A", "B", "B", "B", "B", "B", "B", "B", "B"];
+// const COLD_BRANCH: Record<string, string> = {};
 
 // CANON_POS unifica las tres secuencias.
 const CANON_POS: Record<string, Record<string, number>> = { defdec: DEFDEC_POS, cc: {}, cold: COLD_POS };
@@ -551,7 +546,7 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
         .sort((a: any, b: any) => (a.dateAdded || "") < (b.dateAdded || "") ? -1 : 1);
 
       const firstOut = sms.find((m: any) => m.direction === "outbound");
-      const wf = await getSequenceFromGHLTags(t.contact_id, key);
+      const { sequence: wf, branch } = await getSequenceAndBranchFromGHLTags(t.contact_id, key);
       const enteredAt = firstOut?.dateAdded || null;
 
       let fi = -1;
@@ -572,7 +567,7 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
         events.push({ tmpl: tm, key: hashKey(tm), pos, sent: m.dateAdded || null, reply, dnd, isTrigger: i === trgIdx });
       }
       const trg = events.find((e) => e.isTrigger);
-      return { t, wf, enteredAt, replied: fi >= 0, events,
+      return { t, wf, branch, enteredAt, replied: fi >= 0, events,
         triggerKey: trg?.key ?? null, triggerPos: trg?.pos ?? null };
     });
 
@@ -607,10 +602,10 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
         }
         await c.queryArray(
           `update sms_analytics.cohort
-           set wf=$2, entered_at=$3::timestamptz, replied=$4, trigger_key=$5, trigger_pos=$6,
+           set wf=$2, branch=$7, entered_at=$3::timestamptz, replied=$4, trigger_key=$5, trigger_pos=$6,
                done=true, fetched_at=now()
            where contact_id=$1`,
-          [r.t.contact_id, r.wf, r.enteredAt, r.replied, r.triggerKey, r.triggerPos]);
+          [r.t.contact_id, r.wf, r.enteredAt, r.replied, r.triggerKey, r.triggerPos, r.branch]);
         processed++;
       }
     });
@@ -695,31 +690,14 @@ async function build(cfg?: Record<string, string>) {
       const byWf: Record<string, { ing: number; lt: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
 
-      // Rama por contacto según su 1er SMS: solo defdec (A=Default/B=Declined),
-      // porque sus posiciones tardías son mensajes compartidos entre ramas.
-      // cold deriva la rama del propio texto de CADA mensaje (ver COLD_BRANCH),
-      // no de la historia del contacto — sus 8 mensajes por rama son exclusivos.
-      // El resto de las secuencias no se dividen (br='-').
+      // Rama por contacto: leída directamente desde cohort.branch (tag "rama a", "rama b", etc.)
+      // Normaliza a mayúsculas para compatibilidad con formato actual (A, B, C...)
       const msgs = await c.queryObject<{ wf: string; br: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
-        `with firstmsg as (
-           select distinct on (e.contact_id) e.contact_id, t.tmpl
-           from sms_analytics.msg_events e
-           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
-           where e.wf <> 'defdec'
-              or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
-              or t.tmpl ~* 'avoid colections' or t.tmpl ~* 'better option than an mca'
-           order by e.contact_id, e.pos asc, e.sent_at asc
-         ),
-         cbr as (
+        `with cbr as (
            select c.contact_id,
-             case when c.wf = 'defdec' then
-                    case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
-                         when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
-                         else '-' end
-                  else '-' end as br
+             upper(coalesce(c.branch, '-')) as br
            from sms_analytics.cohort c
-           left join firstmsg fm on fm.contact_id = c.contact_id
-           where c.entered_at >= now() - ($1 || ' days')::interval
+           where c.done and c.entered_at >= now() - ($1 || ' days')::interval
          )
          select e.wf, cbr.br, t.tmpl, min(e.pos)::int as pos,
                 count(*)::bigint as sends,
@@ -738,7 +716,7 @@ async function build(cfg?: Record<string, string>) {
         const sk = skel(r.tmpl);
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
         if (!text) continue;
-        const br = (r.wf === "cold" ? COLD_BRANCH[sk] : null) || r.br || "-";
+        const br = r.br || "-";
         const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const gk = sk + "¦" + br;
