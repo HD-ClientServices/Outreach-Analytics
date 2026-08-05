@@ -546,11 +546,22 @@ function t1(){
       +'<td><div class="seqname">'+esc(s.label)+small
       +(can?'<span class="caret">'+(open?"▾":"▸")+'</span>':'')+'</div></td>'
       +'<td class="num">'+nf(s.lt)+'</td><td class="num">'+nf(s.ing)+'</td><td>'+bar(s._cr,mx)+'</td></tr>';
-    if(open) h+=brs.map(function(b){
-      var bcr=(b.ing?100*b.lt/b.ing:null);
-      return '<tr class="brrow"><td><div class="brname">Branch '+esc(b.branch)+'</div></td>'
-        +'<td class="num">'+nf(b.lt)+'</td><td class="num">'+nf(b.ing)+'</td><td>'+bar(bcr,mx)+'</td></tr>';
-    }).join("");
+    if(open){
+      h+=brs.map(function(b){
+        var bcr=(b.ing?100*b.lt/b.ing:null);
+        return '<tr class="brrow"><td><div class="brname">Branch '+esc(b.branch)+'</div></td>'
+          +'<td class="num">'+nf(b.lt)+'</td><td class="num">'+nf(b.ing)+'</td><td>'+bar(bcr,mx)+'</td></tr>';
+      }).join("");
+      // Contactos cuya rama no se pudo determinar (ni tag, ni un primer mensaje
+      // reconocible). Se muestran para que las ramas cuadren con el total y no
+      // parezca que faltan datos; se omite si es un resto despreciable.
+      var rI=(s.ing||0)-brs.reduce(function(a,b){return a+(b.ing||0)},0);
+      var rL=(s.lt||0)-brs.reduce(function(a,b){return a+(b.lt||0)},0);
+      if(rI>0&&s.ing&&rI/s.ing>=0.01){
+        h+='<tr class="brrow"><td><div class="brname" title="Contacts with no branch tag and no recognizable first message">No branch</div></td>'
+          +'<td class="num">'+nf(rL)+'</td><td class="num">'+nf(rI)+'</td><td>'+bar(rI?100*rL/rI:null,mx)+'</td></tr>';
+      }
+    }
     return h;
   }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">No data.</td></tr>';
 }
