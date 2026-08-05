@@ -265,13 +265,18 @@ const DEFDEC_POS: Record<string, number> = {};
 const COLD_POS_BY_IDX = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8];
 const COLD_POS: Record<string, number> = {};
 // Cada mensaje de cold pertenece EXCLUSIVAMENTE a una rama (a diferencia de
-// defdec, donde las posiciones tardías son compartidas entre ramas) — así que
-// la rama se deriva del propio texto del mensaje, no de la historia del
-// DEPRECATED: Branch detection moved to tag-based system (rama a, rama b, etc.)
-// Previously: Position-based detection (COLD_BRANCH_BY_IDX) for Cold Blast
-// Now: getSequenceAndBranchFromGHLTags() reads "rama X" tags from GHL
-// const COLD_BRANCH_BY_IDX = ["A", "A", "A", "A", "A", "A", "A", "A", "B", "B", "B", "B", "B", "B", "B", "B"];
-// const COLD_BRANCH: Record<string, string> = {};
+// defdec, donde las posiciones tardías son compartidas entre ramas), así que su
+// propio texto basta para saber de qué rama es. Esto NO reemplaza al tag "rama X"
+// de GHL —que sigue mandando— sino que cubre a los contactos que aún no lo tienen:
+// los ~44k históricos quedaron con cohort.branch='-' y sin este respaldo el
+// dashboard muestra 1,2,3 en vez de 1A,1B. Ver el cálculo de `br` en build().
+const COLD_BRANCH_BY_IDX = ["A", "A", "A", "A", "A", "A", "A", "A", "B", "B", "B", "B", "B", "B", "B", "B"];
+const COLD_BRANCH: Record<string, string> = {};
+(OFFICIAL.cold || []).forEach((m, i) => {
+  const sk = skel(m);
+  if (sk.length >= 4 && COLD_POS_BY_IDX[i] != null) COLD_POS[sk] = COLD_POS_BY_IDX[i];
+  if (sk.length >= 4 && COLD_BRANCH_BY_IDX[i] != null) COLD_BRANCH[sk] = COLD_BRANCH_BY_IDX[i];
+});
 
 // CANON_POS unifica las tres secuencias.
 const CANON_POS: Record<string, Record<string, number>> = { defdec: DEFDEC_POS, cc: {}, cold: COLD_POS };
@@ -716,7 +721,9 @@ async function build(cfg?: Record<string, string>) {
         const sk = skel(r.tmpl);
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
         if (!text) continue;
-        const br = r.br || "-";
+        // Híbrido: el tag "rama X" de GHL manda. Si el contacto no lo tiene
+        // (cohort.branch='-'), cold deduce la rama del texto del mensaje.
+        const br = (r.br && r.br !== "-") ? r.br : ((r.wf === "cold" ? COLD_BRANCH[sk] : null) || "-");
         const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const gk = sk + "¦" + br;

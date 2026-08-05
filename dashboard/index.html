@@ -546,7 +546,7 @@ function pills(){
     return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';ST.branch=\'All\';pills();t2()">'+esc(seqName(k))+'</span>'}).join("");
   var w=W(),branches=[];if(w&&w.msgs&&w.msgs[ST.tab]){var seen=new Set();w.msgs[ST.tab].forEach(function(m){if(m.branch&&m.branch!=='-'){var b=m.branch.toUpperCase();if(!seen.has(b)){branches.push(b);seen.add(b)}}})};branches.sort();branches.push('All');
   document.getElementById("branches").innerHTML=branches.map(function(br){
-    return '<span class="pill'+(ST.branch===br?' on':'')+'" onclick="ST.branch=\''+br+'\';t2()">'+esc(br)+'</span>'}).join("");
+    return '<span class="pill'+(ST.branch===br?' on':'')+'" onclick="ST.branch=\''+br+'\';pills();t2()">'+esc(br)+'</span>'}).join("");
 }
 function t2(){
   var w=W(), rows=((w.msgs||{})[ST.tab]||[]).slice();
