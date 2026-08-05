@@ -695,13 +695,34 @@ async function build(cfg?: Record<string, string>) {
       const byWf: Record<string, { ing: number; lt: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
 
-      // Rama por contacto: leída directamente desde cohort.branch (tag "rama a", "rama b", etc.)
-      // Normaliza a mayúsculas para compatibilidad con formato actual (A, B, C...)
+      // Rama por contacto. Manda el tag "rama a"/"rama b" de GHL (cohort.branch).
+      // Si el contacto no lo tiene, defdec la deduce de su PRIMER mensaje: a
+      // diferencia de cold, sus posiciones tardías son mensajes compartidos entre
+      // ramas, así que el texto de cada mensaje no alcanza — hay que mirar con cuál
+      // entró. Solo los SMS 1 y 2 son exclusivos, y son el ancla (firstmsg los
+      // filtra para no anclar en un mensaje compartido). A = Default · B = Declined.
       const msgs = await c.queryObject<{ wf: string; br: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
-        `with cbr as (
+        `with firstmsg as (
+           select distinct on (e.contact_id) e.contact_id, t.tmpl
+           from sms_analytics.msg_events e
+           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+           where e.wf <> 'defdec'
+              or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
+              or t.tmpl ~* 'avoid colections' or t.tmpl ~* 'better option than an mca'
+           order by e.contact_id, e.pos asc, e.sent_at asc
+         ),
+         cbr as (
            select c.contact_id,
-             upper(coalesce(c.branch, '-')) as br
+             case
+               when coalesce(c.branch, '-') <> '-' then upper(c.branch)
+               when c.wf = 'defdec' then
+                 case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
+                      when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
+                      else '-' end
+               else '-'
+             end as br
            from sms_analytics.cohort c
+           left join firstmsg fm on fm.contact_id = c.contact_id
            where c.done and c.entered_at >= now() - ($1 || ' days')::interval
          )
          select e.wf, cbr.br, t.tmpl, min(e.pos)::int as pos,
