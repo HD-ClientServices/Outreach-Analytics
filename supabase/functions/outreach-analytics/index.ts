@@ -683,6 +683,52 @@ function computeInsights(win: any): any {
   return { replicate, remove, pool: pool.length, minSends };
 }
 
+// Rama de cada contacto, compartida por las dos consultas de build() para que el
+// desglose por rama y la tabla de mensajes no puedan discrepar. Manda el tag
+// "rama a"/"rama b" de GHL (cohort.branch).
+//
+// Si el contacto no tiene tag, se deduce, y cada secuencia necesita su método:
+//   · defdec — del SMS con el que entró. Sus posiciones tardías son mensajes
+//     compartidos entre ramas, así que el texto de un mensaje suelto no dice
+//     nada; solo los SMS 1 y 2 son exclusivos y por eso firstmsg ancla en ellos.
+//     A = Default · B = Declined.
+//   · cold — cada uno de sus mensajes pertenece a una sola rama, así que se
+//     resuelve en JS con COLD_BRANCH sobre first_tmpl (o sobre el mensaje mismo,
+//     en la tabla de mensajes). Aquí sale '-' a propósito.
+// Usa $1 = ventana en días.
+const CBR_CTE = `firstmsg as (
+           select distinct on (e.contact_id) e.contact_id, t.tmpl
+           from sms_analytics.msg_events e
+           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+           where e.wf <> 'defdec'
+              or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
+              or t.tmpl ~* 'avoid colections' or t.tmpl ~* 'better option than an mca'
+           order by e.contact_id, e.pos asc, e.sent_at asc
+         ),
+         cbr as (
+           select c.contact_id, fm.tmpl as first_tmpl,
+             case
+               when coalesce(c.branch, '-') <> '-' then upper(c.branch)
+               when c.wf = 'defdec' then
+                 case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
+                      when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
+                      else '-' end
+               else '-'
+             end as br
+           from sms_analytics.cohort c
+           left join firstmsg fm on fm.contact_id = c.contact_id
+           where c.done and c.entered_at >= now() - ($1 || ' days')::interval
+         )`;
+
+// Resuelve la rama a partir de lo que devuelve CBR_CTE. `tmpl` es el texto que
+// identifica la rama en cold: el mensaje mismo en la tabla de mensajes, o el
+// primero del contacto en el desglose por secuencia.
+function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string {
+  if (tagBr && tagBr !== "-") return tagBr;
+  if (wf === "cold" && tmpl) return COLD_BRANCH[skel(tmpl)] || "-";
+  return "-";
+}
+
 async function build(cfg?: Record<string, string>) {
   return await withDb(async (c) => {
     const out: any = { generatedAt: new Date().toISOString(), windows: {} };
@@ -695,36 +741,28 @@ async function build(cfg?: Record<string, string>) {
       const byWf: Record<string, { ing: number; lt: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
 
-      // Rama por contacto. Manda el tag "rama a"/"rama b" de GHL (cohort.branch).
-      // Si el contacto no lo tiene, defdec la deduce de su PRIMER mensaje: a
-      // diferencia de cold, sus posiciones tardías son mensajes compartidos entre
-      // ramas, así que el texto de cada mensaje no alcanza — hay que mirar con cuál
-      // entró. Solo los SMS 1 y 2 son exclusivos, y son el ancla (firstmsg los
-      // filtra para no anclar en un mensaje compartido). A = Default · B = Declined.
+      // Mismo universo de contactos que `seqs` (done + ventana), partido por rama,
+      // para que las ramas sumen el total de su secuencia.
+      const seqBr = await c.queryObject<{ wf: string; br: string; first_tmpl: string | null; ing: bigint; lt: bigint }>(
+        `with ${CBR_CTE}
+         select c.wf, cbr.br, cbr.first_tmpl,
+                count(*)::bigint as ing,
+                count(*) filter (where c.won)::bigint as lt
+         from sms_analytics.cohort c
+         join cbr on cbr.contact_id = c.contact_id
+         where c.done and c.entered_at >= now() - ($1 || ' days')::interval
+         group by c.wf, cbr.br, cbr.first_tmpl`, [String(win)]);
+      const byWfBr: Record<string, Record<string, { ing: number; lt: number }>> = {};
+      for (const r of seqBr.rows) {
+        const br = branchOf(r.br, r.wf, r.first_tmpl);
+        if (br === "-") continue;
+        const m = byWfBr[r.wf] || (byWfBr[r.wf] = {});
+        const e = m[br] || (m[br] = { ing: 0, lt: 0 });
+        e.ing += Number(r.ing); e.lt += Number(r.lt);
+      }
+
       const msgs = await c.queryObject<{ wf: string; br: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
-        `with firstmsg as (
-           select distinct on (e.contact_id) e.contact_id, t.tmpl
-           from sms_analytics.msg_events e
-           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
-           where e.wf <> 'defdec'
-              or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
-              or t.tmpl ~* 'avoid colections' or t.tmpl ~* 'better option than an mca'
-           order by e.contact_id, e.pos asc, e.sent_at asc
-         ),
-         cbr as (
-           select c.contact_id,
-             case
-               when coalesce(c.branch, '-') <> '-' then upper(c.branch)
-               when c.wf = 'defdec' then
-                 case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
-                      when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
-                      else '-' end
-               else '-'
-             end as br
-           from sms_analytics.cohort c
-           left join firstmsg fm on fm.contact_id = c.contact_id
-           where c.done and c.entered_at >= now() - ($1 || ' days')::interval
-         )
+        `with ${CBR_CTE}
          select e.wf, cbr.br, t.tmpl, min(e.pos)::int as pos,
                 count(*)::bigint as sends,
                 count(*) filter (where e.got_reply)::bigint as replies,
@@ -742,9 +780,7 @@ async function build(cfg?: Record<string, string>) {
         const sk = skel(r.tmpl);
         const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
         if (!text) continue;
-        // Híbrido: el tag "rama X" de GHL manda. Si el contacto no lo tiene
-        // (cohort.branch='-'), cold deduce la rama del texto del mensaje.
-        const br = (r.br && r.br !== "-") ? r.br : ((r.wf === "cold" ? COLD_BRANCH[sk] : null) || "-");
+        const br = branchOf(r.br, r.wf, r.tmpl);
         const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const gk = sk + "¦" + br;
@@ -768,8 +804,14 @@ async function build(cfg?: Record<string, string>) {
       out.windows[win] = {
         sequences: WF.map((w) => {
           const s = byWf[w.key] || { ing: 0, lt: 0 };
+          const bm = byWfBr[w.key] || {};
+          const branches = Object.keys(bm).sort().map((br) => ({
+            branch: br, ing: bm[br].ing, lt: bm[br].lt,
+            cr: bm[br].ing ? Math.round(10000 * bm[br].lt / bm[br].ing) / 100 : null,
+          }));
           return { key: w.key, label: w.label, ing: s.ing, lt: s.lt,
-            cr: s.ing ? Math.round(10000 * s.lt / s.ing) / 100 : null };
+            cr: s.ing ? Math.round(10000 * s.lt / s.ing) / 100 : null,
+            branches };
         }),
         unidentified: byWf["none"] || { ing: 0, lt: 0 },
         msgs: msgsByWf,

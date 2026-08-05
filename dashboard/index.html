@@ -36,6 +36,12 @@ tr:last-child td{border-bottom:none}
 tbody tr:hover{background:var(--surface)}
 .num{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:13.5px}
 .seqname{font-weight:500;font-size:14.5px;letter-spacing:-.01em}
+tr.can{cursor:pointer}
+.caret{display:inline-block;margin-left:9px;font-size:9px;color:var(--muted-2);vertical-align:1px}
+.brrow td{background:var(--surface);padding-top:11px;padding-bottom:11px}
+.brname{font-size:13px;color:var(--muted);padding-left:20px}
+.brrow .num{font-size:12.5px;color:var(--muted)}
+.brrow .crval{font-weight:500;color:var(--muted)}
 .crcell{display:flex;align-items:center;gap:12px}
 .crval{font-family:var(--font-mono);font-weight:700;font-size:14px;min-width:54px;text-align:right;font-variant-numeric:tabular-nums}
 .track{flex:1;height:8px;border-radius:4px;background:var(--card-2);overflow:hidden;min-width:70px}
@@ -351,6 +357,7 @@ function opFail(d){ return false; }
 var DATA=null;
 var ORDER=["cc","cold","defdec"];
 var ST={win:30, tab:"cc", sort:"pos", metric:"reply", branch:"All"};
+var EXP={}; // secuencias con el desglose por rama abierto, por key
 
 function showTab(v){
   document.querySelectorAll(".tab").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-view")==v)});
@@ -444,7 +451,7 @@ function render(){
   var H="";
   H+='<div class="controls" style="margin-top:22px"><div class="grp"><span class="lbl">Window</span><div class="grp" id="wins"></div></div></div>';
   H+='<div class="sec" id="aiInside"></div>';
-  H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate</div>'
+  H+='<div class="sec"><h2>Overall performance × sequence</h2><div class="h">LT ÷ contacts entered · sorted by conversion rate. Sequences marked with <b>▸</b> run more than one branch — click the row to compare them.</div>'
    + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
    + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
   H+='<div class="sec"><h2>Messages</h2><div class="h">Sends, responses, live transfers and opt-outs (DND) per message — with their rates. Only messages with 5+ sends. In sequences with A/B branches the SMS&nbsp;# includes the branch (e.g. 1A, 5B): in <b>Defaults &amp; Declined</b>, <b>A</b> = Default · <b>B</b> = Declined; in <b>V2 · BULK FUP COLD BLAST</b>, <b>A</b> = Path A · <b>B</b> = ab testing.</div>'
@@ -532,10 +539,22 @@ function t1(){
   var mx=Math.max.apply(null,rows.map(function(r){return r._cr||0}).concat([0.0001]));
   document.getElementById("t1").innerHTML=rows.map(function(s){
     var small=s.ing!=null&&s.ing<50?'<span class="chip">small sample</span>':'';
-    return '<tr><td><div class="seqname">'+esc(s.label)+small+'</div></td>'
+    // Solo tiene sentido desplegar si hay mas de una rama que comparar.
+    var brs=(s.branches||[]).filter(function(b){return b.branch&&b.branch!="-"});
+    var can=brs.length>1, open=can&&EXP[s.key];
+    var h='<tr'+(can?' class="can" onclick="toggleSeq(\''+s.key+'\')"':'')+'>'
+      +'<td><div class="seqname">'+esc(s.label)+small
+      +(can?'<span class="caret">'+(open?"▾":"▸")+'</span>':'')+'</div></td>'
       +'<td class="num">'+nf(s.lt)+'</td><td class="num">'+nf(s.ing)+'</td><td>'+bar(s._cr,mx)+'</td></tr>';
+    if(open) h+=brs.map(function(b){
+      var bcr=(b.ing?100*b.lt/b.ing:null);
+      return '<tr class="brrow"><td><div class="brname">Branch '+esc(b.branch)+'</div></td>'
+        +'<td class="num">'+nf(b.lt)+'</td><td class="num">'+nf(b.ing)+'</td><td>'+bar(bcr,mx)+'</td></tr>';
+    }).join("");
+    return h;
   }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">No data.</td></tr>';
 }
+function toggleSeq(k){ EXP[k]=!EXP[k]; t1(); }
 function pills(){
   document.getElementById("sorts").innerHTML=
     '<span class="pill'+(ST.sort=="pos"?' on':'')+'" onclick="ST.sort=\'pos\';pills();t2()">Position</span>'
