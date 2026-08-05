@@ -350,7 +350,7 @@ function opParam(){ return ""; }
 function opFail(d){ return false; }
 var DATA=null;
 var ORDER=["cc","cold","defdec"];
-var ST={win:30, tab:"cc", sort:"pos", metric:"reply"};
+var ST={win:30, tab:"cc", sort:"pos", metric:"reply", branch:"All"};
 
 function showTab(v){
   document.querySelectorAll(".tab").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-view")==v)});
