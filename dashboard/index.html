@@ -450,6 +450,7 @@ function render(){
   H+='<div class="sec"><h2>Messages</h2><div class="h">Sends, responses, live transfers and opt-outs (DND) per message — with their rates. Only messages with 5+ sends. In sequences with A/B branches the SMS&nbsp;# includes the branch (e.g. 1A, 5B): in <b>Defaults &amp; Declined</b>, <b>A</b> = Default · <b>B</b> = Declined; in <b>V2 · BULK FUP COLD BLAST</b>, <b>A</b> = Path A · <b>B</b> = ab testing.</div>'
    + '<div class="controls" style="margin-bottom:14px"><div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div></div>'
    + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Sequence</span><div class="grp" id="tabs"></div></div></div>'
+   + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Branch</span><div class="grp" id="branches"></div></div></div>'
    + '<div class="card"><div style="overflow-x:auto"><table><thead><tr>'
    + '<th class="num" style="width:52px">SMS #</th><th style="min-width:260px">Message</th>'
    + '<th class="num">Sent</th><th class="num">Responses</th><th class="num">Live transfers</th><th class="num">Opt-out</th>'
@@ -543,9 +544,13 @@ function pills(){
    +'<span class="pill'+(ST.sort=="dnd"?' on':'')+'" onclick="ST.sort=\'dnd\';pills();t2()">Opt-out rate</span>';
   document.getElementById("tabs").innerHTML=ORDER.map(function(k){
     return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';pills();t2()">'+esc(seqName(k))+'</span>'}).join("");
+  var w=W(),branches=new Set(['All']);if(w&&w.msgs&&w.msgs[ST.tab]){w.msgs[ST.tab].forEach(function(m){if(m.branch&&m.branch!=='-')branches.add(m.branch.toUpperCase())})};
+  document.getElementById("branches").innerHTML=Array.from(branches).sort().map(function(br){
+    return '<span class="pill'+(ST.branch===br?' on':'')+'" onclick="ST.branch=\''+br+'\';t2()">'+esc(br)+'</span>'}).join("");
 }
 function t2(){
   var w=W(), rows=((w.msgs||{})[ST.tab]||[]).slice();
+  if(ST.branch&&ST.branch!=="All") rows=rows.filter(function(m){return (m.branch||'').toUpperCase()===ST.branch});
   if(ST.sort=="pos") rows.sort(function(a,b){return (a.pos-b.pos)||(a.branch||'').localeCompare(b.branch||'')});
   else if(ST.sort=="reply") rows.sort(function(a,b){return b.replyRate-a.replyRate});
   else if(ST.sort=="lt") rows.sort(function(a,b){return b.ltRate-a.ltRate});
