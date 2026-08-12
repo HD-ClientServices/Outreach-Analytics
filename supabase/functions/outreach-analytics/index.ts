@@ -1328,6 +1328,518 @@ async function insightAi(cfg: Record<string, string>, win: string) {
     counts: { replicate: (ins.replicate || []).length, remove: (ins.remove || []).length } };
 }
 
+// ============================================================================
+// BUYER PERSONA — una persona por vertical (MCA / Credit Card), generada desde
+// las transcripciones de las llamadas que terminaron en WON.
+//
+// Cadena completa:  persona_scan -> persona_transcribe -> persona_extract -> persona_build
+//
+// Igual que el backfill de SMS, la transcripción no entra en los 150s de una
+// edge function, así que `call_transcript` es a la vez cola y almacén y se drena
+// por tandas acotadas por tiempo. La diferencia con `work()` es que ACÁ SE GASTA
+// PLATA, y por eso el unique(message_id, rec_index) de la tabla no es cosmético:
+// una llamada ya transcripta nunca se re-manda a Deepgram, así que re-scanear o
+// loopear el endpoint abierto cuesta 0.
+// ============================================================================
+
+// Las 5 secciones son FIJAS y su numeración/título/ayuda son copy del código, no
+// salida del modelo. Eso es lo que garantiza que el diseño de las tarjetas del
+// dashboard no dependa de lo que se le ocurra escribir a la IA.
+const PERSONA_SECTIONS: { id: string; no: string; title: string; help: string }[] = [
+  { id: "firmographics", no: "01", title: "Firmographics",
+    help: "Industry, geography and track record of the businesses that close" },
+  { id: "pain_context", no: "02", title: "Pain points &amp; context",
+    help: "What hurts them and why they answer the call" },
+  { id: "buying_drivers", no: "03", title: "Buying drivers",
+    help: "What motivates them to close" },
+  { id: "objections", no: "04", title: "Typical objections &amp; how to handle them",
+    help: "The typical objection and the line that disarms it (gold for the SMS copy)" },
+  { id: "voice", no: "05", title: "Communication style",
+    help: "Their words and the metrics they watch — to mirror in the SMS copy" },
+];
+const PERSONA_SECTION_IDS = PERSONA_SECTIONS.map((s) => s.id);
+
+const DG_URL = "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=multi";
+const MAX_AUDIO_BYTES = 60 * 1024 * 1024; // ~60 min de PCM 8kHz; más que eso se descarta
+const MIN_TRANSCRIPT_WORDS = 50;          // menos que esto = silencio / música de espera
+const DEFAULT_DAILY_MINUTES_CAP = 600;
+
+function nInt(v: any): number { return Number(v || 0); }
+function keyOk(k: string): boolean { return /^[a-z0-9_-]{2,24}$/.test(k); }
+
+// Hermano binario de gget(): mismo backoff, pero devuelve bytes en vez de JSON.
+// GHL responde 403 bajo ráfaga (verificado), así que entra en la lista de reintentos.
+async function gbin(url: string, key: string, tries = 4): Promise<{ ok: boolean; status: number; bytes: ArrayBuffer | null }> {
+  let status = 0;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url, { headers: { Authorization: "Bearer " + key, Version: VER } });
+      status = r.status;
+      if (r.status === 200) return { ok: true, status, bytes: await r.arrayBuffer() };
+      if ([429, 403, 502, 503].includes(r.status)) { await sleep(1500 + i * 1500); continue; }
+      return { ok: false, status, bytes: null };
+    } catch (_) { await sleep(1000 + i * 1000); }
+  }
+  return { ok: false, status, bytes: null };
+}
+
+// ---- Lectura: configs + pipelines + estado de la cola -----------------------
+async function personas() {
+  return await withDb(async (c) => {
+    const cfgs = await c.queryObject<any>(
+      `select key, label, headline, sort, active, min_sample, since_days
+         from sms_analytics.persona_config order by sort, key`);
+    const pipes = await c.queryObject<any>(
+      `select persona_key, pipeline_id, pipeline_name from sms_analytics.persona_pipeline
+        order by persona_key, pipeline_name`);
+    const counts = await c.queryObject<any>(
+      `select p.persona_key,
+              count(*) filter (where t.status = 'queued')::bigint   as queued,
+              count(*) filter (where t.status = 'done')::bigint     as done,
+              count(*) filter (where t.status = 'no_audio')::bigint as no_audio,
+              count(*) filter (where t.status = 'failed')::bigint   as failed,
+              count(*) filter (where t.status = 'short')::bigint    as short
+         from sms_analytics.persona_pipeline p
+         join sms_analytics.call_transcript t on t.pipeline_id = p.pipeline_id
+        group by p.persona_key`);
+    const docs = await c.queryObject<any>(
+      `select persona_key, n_calls, created_at from sms_analytics.persona_doc where is_current`);
+
+    const byKey = (rows: any[], k: string) => rows.filter((r) => r.persona_key === k);
+    return (cfgs.rows || []).map((cf: any) => {
+      const q = byKey(counts.rows || [], cf.key)[0] || {};
+      const d = byKey(docs.rows || [], cf.key)[0] || null;
+      return {
+        key: cf.key, label: cf.label, headline: cf.headline, sort: cf.sort,
+        active: cf.active, minSample: cf.min_sample, sinceDays: cf.since_days,
+        pipelines: byKey(pipes.rows || [], cf.key).map((p: any) => ({ id: p.pipeline_id, name: p.pipeline_name })),
+        queue: { queued: nInt(q.queued), done: nInt(q.done), noAudio: nInt(q.no_audio),
+                 failed: nInt(q.failed), short: nInt(q.short) },
+        current: d ? { nCalls: d.n_calls, at: d.created_at } : null,
+      };
+    });
+  });
+}
+
+// Los pipelines de GHL, para la UI de selección. Sumar un buyer nuevo (o
+// "United Settlement Closing" cuando exista) es tildarlo acá, no tocar código.
+async function ghlPipelines(cfg: Record<string, string>) {
+  const d = await gget(BASE + "/opportunities/pipelines?locationId=" + cfg.ghl_location, cfg.ghl_api_key);
+  const pls = d?.pipelines ?? [];
+  if (!pls.length) return { error: "GHL no devolvió pipelines (¿token o location?)" };
+  return {
+    pipelines: pls.map((p: any) => ({
+      id: p.id, name: p.name,
+      closing: /closing|wins?\b/i.test(p.name || ""),
+      wonStageId: (p.stages || []).find((s: any) => /^won$|ganad/i.test((s.name || "").trim()))?.id || null,
+      stages: (p.stages || []).map((s: any) => ({ id: s.id, name: s.name })),
+    })).sort((a: any, b: any) => (b.closing ? 1 : 0) - (a.closing ? 1 : 0) || a.name.localeCompare(b.name)),
+  };
+}
+
+async function personaSave(body: any) {
+  const key = String(body?.key || "").trim().toLowerCase();
+  const label = String(body?.label || "").trim();
+  if (!keyOk(key)) return { error: "key inválida (a-z, 0-9, _ y -, 2-24 caracteres)" };
+  if (!label) return { error: "falta el label" };
+  const pipes: any[] = Array.isArray(body?.pipelines) ? body.pipelines.slice(0, 40) : [];
+  const headline = body?.headline ? String(body.headline).slice(0, 120) : null;
+  const minSample = Math.min(Math.max(parseInt(body?.minSample) || 15, 1), 500);
+  const sort = Math.min(Math.max(parseInt(body?.sort) || 100, 0), 9999);
+
+  return await withDb(async (c) => {
+    await c.queryArray(
+      `insert into sms_analytics.persona_config(key,label,headline,sort,min_sample)
+       values ($1,$2,$3,$4,$5)
+       on conflict (key) do update set label=excluded.label, headline=excluded.headline,
+         sort=excluded.sort, min_sample=excluded.min_sample, updated_at=now()`,
+      [key, label, headline, sort, minSample]);
+    await c.queryArray(`insert into sms_analytics.persona_run(persona_key,phase) values ($1,'idle')
+                        on conflict (persona_key) do nothing`, [key]);
+    // Reemplazo completo: la UI manda la lista entera, no un delta.
+    await c.queryArray(`delete from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
+    for (const p of pipes) {
+      const pid = String(p?.id || "").trim();
+      if (!pid) continue;
+      await c.queryArray(
+        `insert into sms_analytics.persona_pipeline(persona_key,pipeline_id,pipeline_name)
+         values ($1,$2,$3) on conflict do nothing`,
+        [key, pid, p?.name ? String(p.name).slice(0, 120) : null]);
+    }
+    return { ok: true, key, label, pipelines: pipes.length };
+  });
+}
+
+async function personaStatus(key: string) {
+  return await withDb(async (c) => {
+    const r = await c.queryObject<any>(
+      `select
+         (select phase from sms_analytics.persona_run where persona_key=$1) as phase,
+         (select note  from sms_analytics.persona_run where persona_key=$1) as note,
+         (select count(*)::bigint from sms_analytics.persona_won_opp o
+            join sms_analytics.persona_pipeline p on p.pipeline_id=o.pipeline_id and p.persona_key=$1) as opps,
+         (select count(*)::bigint from sms_analytics.persona_won_opp o
+            join sms_analytics.persona_pipeline p on p.pipeline_id=o.pipeline_id and p.persona_key=$1
+            where o.expanded) as expanded,
+         (select count(*)::bigint from sms_analytics.persona_won_opp o
+            join sms_analytics.persona_pipeline p on p.pipeline_id=o.pipeline_id and p.persona_key=$1
+            where o.expanded and o.n_calls = 0) as no_calls`, [key]);
+    const t = await c.queryObject<any>(
+      `select
+         count(*) filter (where t.status='queued')::bigint   as queued,
+         count(*) filter (where t.status='done')::bigint     as done,
+         count(*) filter (where t.status='no_audio')::bigint as no_audio,
+         count(*) filter (where t.status='failed')::bigint   as failed,
+         count(*) filter (where t.status='short')::bigint    as short,
+         count(*) filter (where t.status='done' and t.extract is not null)::bigint as extracted,
+         count(*) filter (where t.lang like 'es%')::bigint   as es
+       from sms_analytics.call_transcript t
+       join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id
+      where p.persona_key = $1`, [key]);
+    const d = await c.queryObject<any>(
+      `select n_calls, created_at from sms_analytics.persona_doc where persona_key=$1 and is_current`, [key]);
+    const a = r.rows[0] || {}; const b = t.rows[0] || {};
+    return {
+      key, phase: a.phase || "idle", note: a.note || null,
+      opps: nInt(a.opps), expanded: nInt(a.expanded), noCalls: nInt(a.no_calls),
+      queued: nInt(b.queued), done: nInt(b.done), noAudio: nInt(b.no_audio),
+      failed: nInt(b.failed), short: nInt(b.short), extracted: nInt(b.extracted), spanish: nInt(b.es),
+      doc: d.rows[0] ? { nCalls: d.rows[0].n_calls, at: d.rows[0].created_at } : null,
+    };
+  });
+}
+
+async function personaData(key: string) {
+  return await withDb(async (c) => {
+    const cf = await c.queryObject<any>(
+      `select key,label,headline,min_sample from sms_analytics.persona_config where key=$1`, [key]);
+    if (!cf.rows[0]) return { error: "persona '" + key + "' no existe" };
+    const d = await c.queryObject<any>(
+      `select doc, n_calls, n_opps, pipelines, model, created_at
+         from sms_analytics.persona_doc where persona_key=$1 and is_current`, [key]);
+    const cfg = cf.rows[0];
+    if (!d.rows[0]) return { key, label: cfg.label, minSample: cfg.min_sample, doc: null, pending: true };
+    const r = d.rows[0];
+    return { key, label: cfg.label, minSample: cfg.min_sample, doc: r.doc,
+      nCalls: r.n_calls, nOpps: r.n_opps, pipelines: r.pipelines, model: r.model, at: r.created_at };
+  });
+}
+
+// ---- TRANSCRIBE: audio de GHL -> Deepgram -> texto ---------------------------
+// Acotado por tiempo y drenable en tandas, como work(). Dos diferencias que
+// importan: la concurrencia es 3 (no 14) porque acá el cuello es la MEMORIA —una
+// llamada de 20 min son ~19 MB en RAM— y no el rate limit; y cada fila que sale
+// de 'queued' ya no vuelve nunca, que es lo que hace que esto no se pueda usar
+// para quemar la cuota de Deepgram.
+async function transcribeOne(cfg: Record<string, string>, row: any): Promise<{ status: string; err?: string; words?: number; lang?: string; bytes?: number; text?: string }> {
+  const loc = cfg.ghl_location, gkey = cfg.ghl_api_key;
+  const base = BASE + "/conversations/messages/" + row.message_id + "/locations/" + loc + "/recording";
+
+  // index=1 es la pata del closer en un live transfer. Si no existe (422), la
+  // llamada simplemente no fue transferida: se cae al recording por defecto.
+  let audio = await gbin(base + "?index=" + row.rec_index, gkey, 3);
+  if (!audio.ok) audio = await gbin(base, gkey, 3);
+  if (!audio.ok || !audio.bytes || !audio.bytes.byteLength)
+    return { status: "no_audio", err: "GHL recording " + audio.status };
+  if (audio.bytes.byteLength > MAX_AUDIO_BYTES)
+    return { status: "failed", err: "oversize " + audio.bytes.byteLength + "B" };
+
+  const dkey = (cfg.deepgram_api_key || "").trim();
+  if (!dkey) return { status: "failed", err: "falta deepgram_api_key en sms_analytics.config" };
+
+  let r: Response;
+  try {
+    r = await fetch(DG_URL, {
+      method: "POST",
+      headers: { Authorization: "Token " + dkey, "Content-Type": "audio/wav" },
+      body: audio.bytes,
+    });
+  } catch (e) { return { status: "retry", err: "deepgram fetch: " + String(e) }; }
+
+  if (!r.ok) {
+    const body = (await r.text()).slice(0, 200);
+    // 4xx no se reintenta: loopear un 401 solo quema el presupuesto de tiempo.
+    return { status: r.status >= 400 && r.status < 500 ? "failed" : "retry",
+             err: "deepgram " + r.status + ": " + body };
+  }
+  const j = await r.json();
+  const ch = j?.results?.channels?.[0];
+  const text = String(ch?.alternatives?.[0]?.transcript || "").trim();
+  const lang = ch?.detected_language || null;
+  const words = text ? text.split(/\s+/).length : 0;
+  if (words < MIN_TRANSCRIPT_WORDS)
+    return { status: "short", err: words + " palabras", words, lang, bytes: audio.bytes.byteLength, text };
+  return { status: "done", words, lang, bytes: audio.bytes.byteLength, text };
+}
+
+async function personaTranscribe(cfg: Record<string, string>, key: string | null, budgetMs: number, limit: number) {
+  const t0 = Date.now();
+  if (!(cfg.deepgram_api_key || "").trim())
+    return { error: "Falta 'deepgram_api_key' en sms_analytics.config." };
+
+  // Techo diario de minutos: incluso si el scan se abusara, el gasto queda acotado.
+  const cap = parseInt(cfg.persona_daily_minutes_cap || "") || DEFAULT_DAILY_MINUTES_CAP;
+  const usedMin = await withDb(async (c) => {
+    const r = await c.queryObject<{ s: number }>(
+      `select coalesce(sum(coalesce(duration_s, 600)), 0)::float / 60 as s
+         from sms_analytics.call_transcript
+        where status in ('done','short') and done_at > now() - interval '24 hours'`);
+    return Number(r.rows[0]?.s || 0);
+  });
+  if (usedMin >= cap)
+    return { error: "tope diario alcanzado (" + Math.round(usedMin) + "/" + cap + " min). Subí persona_daily_minutes_cap si hace falta." };
+
+  let done = 0, failed = 0, noAudio = 0, short = 0, minutes = 0;
+  const claimed = new Set<string>();
+
+  while (Date.now() - t0 < budgetMs) {
+    if (limit > 0 && claimed.size >= limit) break;
+    const take = limit > 0 ? Math.min(6, limit - claimed.size) : 6;
+    const batch = await withDb(async (c) => {
+      const r = await c.queryObject<any>(
+        `update sms_analytics.call_transcript set attempts = attempts + 1
+          where id in (
+            select t.id from sms_analytics.call_transcript t
+            ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $2" : ""}
+            where t.status = 'queued' and t.attempts < 3
+            order by t.attempts, t.id limit $1 for update skip locked)
+          returning id, message_id, rec_index, duration_s, attempts`,
+        key ? [take, key] : [take]);
+      return r.rows;
+    });
+    if (!batch.length) break;
+    for (const b of batch) claimed.add(String(b.id));
+
+    const out = await pool(batch, 3, async (row: any) => ({ row, res: await transcribeOne(cfg, row) }));
+
+    await withDb(async (c) => {
+      for (const o of out) {
+        if (!o) continue;
+        const { row, res } = o;
+        if (res.status === "retry") {
+          // Se queda en 'queued'; el attempts++ ya se aplicó al reclamarla.
+          const dead = (row.attempts || 0) >= 3;
+          await c.queryArray(
+            `update sms_analytics.call_transcript set status=$2, err=$3 where id=$1`,
+            [row.id, dead ? "failed" : "queued", res.err || null]);
+          if (dead) failed++;
+          continue;
+        }
+        await c.queryArray(
+          `update sms_analytics.call_transcript
+              set status=$2, err=$3, words=$4, lang=$5, bytes=$6, transcript=$7, done_at=now()
+            where id=$1`,
+          [row.id, res.status, res.err || null, res.words ?? null, res.lang ?? null,
+           res.bytes ?? null, res.text ?? null]);
+        if (res.status === "done") { done++; minutes += (row.duration_s || 0) / 60; }
+        else if (res.status === "short") short++;
+        else if (res.status === "no_audio") noAudio++;
+        else failed++;
+      }
+    });
+  }
+
+  const remaining = await withDb(async (c) => {
+    const r = await c.queryObject<{ n: bigint }>(
+      `select count(*)::bigint as n from sms_analytics.call_transcript t
+       ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $1" : ""}
+       where t.status = 'queued' and t.attempts < 3`, key ? [key] : []);
+    return Number(r.rows[0].n);
+  });
+  if (key) await setPhase(key, remaining ? "transcribing" : "extracting",
+    remaining ? remaining + " llamadas en cola" : null);
+
+  return { key, done, failed, noAudio, short, remaining,
+    minutes: Math.round(minutes * 10) / 10, dailyMinutesUsed: Math.round(usedMin),
+    elapsedMs: Date.now() - t0 };
+}
+
+// ---- SCAN: WONs de los pipelines configurados -> una llamada encolada c/u ----
+//
+// Fase 1: un barrido `status=all` por pipeline (mismo patrón que markwon()) y se
+// clasifica EN CÓDIGO. La señal primaria de "ganado" es `status === 'won'`: es el
+// hecho de negocio, no la posición de una tarjeta — un won parado en "Contract
+// Sent" sigue siendo un comprador y su llamada sigue siendo evidencia (eso explica
+// el 70 vs 61 de RISE). Además no exige que exista un stage llamado "Won", así que
+// un buyer futuro cuyo stage se llame "Funded" entra sin tocar código. Igual se
+// guarda `won_src` con las dos señales, para poder ampliar después sin re-scanear.
+//
+// Fase 2: expandir contacto -> conversaciones -> mensajes. Son 2-4 requests a GHL
+// por deal, así que es la parte que se pasa de los 150s: se drena bajo deadline y
+// se retoma en la corrida siguiente (`expanded`, igual que `cohort.done`).
+async function personaScan(cfg: Record<string, string>, key: string, budgetMs: number, dry: boolean) {
+  const t0 = Date.now();
+  const deadline = t0 + Math.min(budgetMs, 115000);
+  const gkey = cfg.ghl_api_key, loc = cfg.ghl_location;
+
+  const pipes = await withDb(async (c) => {
+    const r = await c.queryObject<{ pipeline_id: string; pipeline_name: string | null }>(
+      `select pipeline_id, pipeline_name from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
+    return r.rows;
+  });
+  if (!pipes.length) return { error: "la persona '" + key + "' no tiene pipelines configurados" };
+
+  if (!dry) await setPhase(key, "scanning");
+
+  // Stage "Won" real de cada pipeline, para poder reportar la segunda señal.
+  const pdata = await gget(BASE + "/opportunities/pipelines?locationId=" + loc, gkey);
+  const wonStage: Record<string, string | null> = {};
+  const pname: Record<string, string> = {};
+  for (const p of (pdata?.pipelines ?? [])) {
+    wonStage[p.id] = (p.stages || []).find((s: any) => /^won$|ganad/i.test((s.name || "").trim()))?.id || null;
+    pname[p.id] = p.name || "";
+  }
+
+  // ---- fase 1 ----
+  type Row = { opportunity_id: string; pipeline_id: string; contact_id: string | null;
+               won_src: string; stage_id: string | null; won_at: string | null };
+  const found: Row[] = [];
+  const perPipe: Record<string, { name: string; total: number; byStatus: number; byStage: number }> = {};
+
+  await pool(pipes, 6, async (p) => {
+    const pid = p.pipeline_id;
+    perPipe[pid] = { name: pname[pid] || p.pipeline_name || pid, total: 0, byStatus: 0, byStage: 0 };
+    let url: string | undefined = BASE + "/opportunities/search?location_id=" + loc + "&pipeline_id=" + pid +
+      "&status=all&limit=100&order=added_desc";
+    let pg = 0;
+    while (url && pg < 200 && Date.now() < deadline) {
+      const d = await gget(url, gkey); if (!d) break;
+      const ops = d.opportunities ?? []; if (!ops.length) break;
+      perPipe[pid].total += ops.length;
+      for (const o of ops) {
+        const byStatus = o.status === "won";
+        const byStage = !!wonStage[pid] && o.pipelineStageId === wonStage[pid];
+        if (byStatus) perPipe[pid].byStatus++;
+        if (byStage) perPipe[pid].byStage++;
+        if (!byStatus && !byStage) continue;
+        found.push({
+          opportunity_id: o.id, pipeline_id: pid, contact_id: o.contactId || null,
+          won_src: byStatus && byStage ? "both" : byStatus ? "status" : "stage",
+          stage_id: o.pipelineStageId || null,
+          won_at: o.lastStatusChangeAt || o.updatedAt || o.createdAt || null,
+        });
+      }
+      url = d.meta?.nextPageUrl; pg++;
+    }
+  });
+
+  if (dry) {
+    return { dry: true, key, pipelines: perPipe,
+      won: found.length,
+      wonByStatus: found.filter((f) => f.won_src !== "stage").length,
+      wonByStage: found.filter((f) => f.won_src !== "status").length,
+      withContact: found.filter((f) => f.contact_id).length,
+      elapsedMs: Date.now() - t0 };
+  }
+
+  await withDb(async (c) => {
+    for (let i = 0; i < found.length; i += 200) {
+      const chunk = found.slice(i, i + 200);
+      const vals = chunk.map((_, j) => {
+        const b = j * 6;
+        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6}::timestamptz)`;
+      }).join(",");
+      const args = chunk.flatMap((f) => [f.opportunity_id, f.pipeline_id, f.contact_id, f.won_src, f.stage_id, f.won_at]);
+      await c.queryArray(
+        `insert into sms_analytics.persona_won_opp(opportunity_id,pipeline_id,contact_id,won_src,stage_id,won_at)
+         values ${vals}
+         on conflict (opportunity_id) do update set won_src=excluded.won_src, stage_id=excluded.stage_id,
+           contact_id=coalesce(excluded.contact_id, sms_analytics.persona_won_opp.contact_id), seen_at=now()`, args);
+    }
+    for (const pid of Object.keys(wonStage)) {
+      if (wonStage[pid]) await c.queryArray(
+        `update sms_analytics.persona_pipeline set won_stage_id=$2, pipeline_name=coalesce($3, pipeline_name)
+          where pipeline_id=$1`, [pid, wonStage[pid], pname[pid] || null]);
+    }
+  });
+
+  // ---- fase 2: expandir a llamadas ----
+  let expanded = 0, withCalls = 0, noCalls = 0, queued = 0, alreadyQueued = 0;
+  while (Date.now() < deadline) {
+    const batch = await withDb(async (c) => {
+      const r = await c.queryObject<any>(
+        `update sms_analytics.persona_won_opp set attempts = attempts + 1
+          where opportunity_id in (
+            select o.opportunity_id from sms_analytics.persona_won_opp o
+            join sms_analytics.persona_pipeline p on p.pipeline_id = o.pipeline_id and p.persona_key = $1
+            where not o.expanded and o.attempts < 3 and o.contact_id is not null
+            order by o.attempts, o.opportunity_id limit 20 for update skip locked)
+          returning opportunity_id, pipeline_id, contact_id`, [key]);
+      return r.rows;
+    });
+    if (!batch.length) break;
+
+    const results = await pool(batch, 6, async (o: any) => {
+      const cd = await gget(BASE + "/conversations/search?locationId=" + loc + "&contactId=" + o.contact_id, gkey);
+      const convs = cd?.conversations ?? [];
+      const calls: any[] = [];
+      for (const cv of convs.slice(0, 3)) {
+        const md = await gget(BASE + "/conversations/" + cv.id + "/messages?limit=100", gkey);
+        for (const m of (md?.messages?.messages ?? [])) {
+          if (m.messageType === "TYPE_CALL" && m.status === "completed")
+            calls.push({ id: m.id, conv: cv.id, dur: m.meta?.call?.duration ?? null, at: m.dateAdded || null });
+        }
+      }
+      // La más larga gana. `duration` null NO es 0: GHL lo deja vacío justamente en
+      // las llamadas largas y transferidas, que son las que más nos interesan.
+      calls.sort((a, b) => {
+        const da = a.dur == null ? Number.POSITIVE_INFINITY : a.dur;
+        const db = b.dur == null ? Number.POSITIVE_INFINITY : b.dur;
+        if (db !== da) return db - da;
+        return String(b.at || "").localeCompare(String(a.at || ""));
+      });
+      return { o, best: calls[0] || null, n: calls.length };
+    });
+
+    await withDb(async (c) => {
+      for (const r of results) {
+        if (!r) continue;
+        if (r.best) {
+          const ins = await c.queryObject<{ id: bigint }>(
+            `insert into sms_analytics.call_transcript
+               (pipeline_id,opportunity_id,contact_id,conversation_id,message_id,rec_index,call_at,duration_s)
+             values ($1,$2,$3,$4,$5,1,$6::timestamptz,$7)
+             on conflict (message_id, rec_index) do nothing
+             returning id`,
+            [r.o.pipeline_id, r.o.opportunity_id, r.o.contact_id, r.best.conv, r.best.id, r.best.at, r.best.dur]);
+          if (ins.rows.length) queued++; else alreadyQueued++;
+          withCalls++;
+        } else noCalls++;
+        await c.queryArray(
+          `update sms_analytics.persona_won_opp set expanded=true, n_calls=$2 where opportunity_id=$1`,
+          [r.o.opportunity_id, r.n]);
+        expanded++;
+      }
+    });
+  }
+
+  const remaining = await withDb(async (c) => {
+    const r = await c.queryObject<{ n: bigint }>(
+      `select count(*)::bigint as n from sms_analytics.persona_won_opp o
+         join sms_analytics.persona_pipeline p on p.pipeline_id=o.pipeline_id and p.persona_key=$1
+        where not o.expanded and o.attempts < 3`, [key]);
+    return Number(r.rows[0].n);
+  });
+  await setPhase(key, remaining ? "scanning" : "transcribing",
+    remaining ? "quedan " + remaining + " oportunidades por expandir" : null);
+
+  return { key, pipelines: perPipe, won: found.length,
+    wonByStatus: found.filter((f) => f.won_src !== "stage").length,
+    wonByStage: found.filter((f) => f.won_src !== "status").length,
+    expanded, withCalls, noCalls, queued, alreadyQueued, remaining, elapsedMs: Date.now() - t0 };
+}
+
+async function setPhase(key: string, phase: string, note?: string | null) {
+  await withDb(async (c) => {
+    await c.queryArray(
+      `update sms_analytics.persona_run
+          set phase=$2, note=$3, updated_at=now(),
+              started_at = case when $2 in ('scanning') then now() else started_at end,
+              finished_at = case when $2 in ('done','error') then now() else null end
+        where persona_key=$1`, [key, phase, note ?? null]);
+  });
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
@@ -1361,6 +1873,24 @@ Deno.serve(async (req) => {
       return json(await generate(cfg, body));
     }
     if (action === "insight_ai") return json(await insightAi(cfg, url.searchParams.get("win") || "30"));
+    if (action === "personas") return json(await personas());
+    if (action === "ghl_pipelines") return json(await ghlPipelines(cfg));
+    if (action === "persona_data") return json(await personaData(url.searchParams.get("key") || "mca"));
+    if (action === "persona_status") return json(await personaStatus(url.searchParams.get("key") || "mca"));
+    if (action === "persona_save") {
+      const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+      return json(await personaSave(body));
+    }
+    if (action === "persona_scan") {
+      const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
+      return json(await personaScan(cfg, url.searchParams.get("key") || "mca", budget,
+        url.searchParams.get("dry") === "1"));
+    }
+    if (action === "persona_transcribe") {
+      const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
+      return json(await personaTranscribe(cfg, url.searchParams.get("key"), budget,
+        Math.max(Number(url.searchParams.get("limit") || 0), 0)));
+    }
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
