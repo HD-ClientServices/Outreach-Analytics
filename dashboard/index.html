@@ -255,70 +255,20 @@ tr.can{cursor:pointer}
 </div>
 
 <!-- ======================= BUYER PERSONA ======================= -->
+<!-- Las tarjetas se arman desde ?action=persona_data. El marcado que produce
+     renderPersona() es el mismo que estaba escrito a mano acá; lo único que
+     cambió es de dónde salen los datos. -->
 <div id="view-persona" class="view pv" hidden>
-  <div class="sub" style="margin-top:22px">The profile of those who close · from <b>67 won deals</b> (closed&nbsp;won) · <span style="opacity:.6">updates every 3 weeks, on Sundays</span></div>
-  <div class="bp-grid">
-
-    <div class="bp-field">
-      <div class="bp-label"><span class="n">01</span> Firmographics</div>
-      <div class="bp-box">
-        <div class="bp-line"><b>Profile:</b> Owner-operator of a physical, cash-intensive business, 5 to 30 years old; healthy but drowning in debt, not bankrupt — 9 in 10 (90%) run this kind of brick-and-mortar operation.</div>
-        <div class="bp-line"><b>Industries:</b> 55% trades/contractors, 15% transport/auto, 13% food/retail, 14% health/services. Almost zero e-commerce.</div>
-        <div class="bp-line"><b>Debt:</b> Median of $111k (range $20k to $520k); 9 of 10 are stacked in 2 to 6 MCAs.</div>
-        <div class="bp-line"><b>Mindset:</b> Thinks in dollars per week or per day, never in APR — 91% frame the debt that way; naive about MCAs (“didn't know the rate was 56%”).</div>
-        <div class="bp-line"><b>Geography:</b> Spread across the US, weighted to the South and the Sun&nbsp;Belt; 1 in 6 is handled in Spanish.</div>
-      </div>
-      <div class="bp-help">Industry, geography and track record of the businesses that close</div>
-    </div>
-
-    <div class="bp-field">
-      <div class="bp-label"><span class="n">02</span> Pain points &amp; context</div>
-      <div class="bp-box">
-        <div class="bp-line"><b>The pain:</b> A daily or weekly payment ($3k to $20k per week, some pay $5,000 a day) that strangles their cash flow — 82% describe it just like that. In their words: “money in the front door, out the back door”.</div>
-        <div class="bp-line"><b>Stacking:</b> 9 of 10 are stacked (“I borrow one to pay the other”). Current but drowning; the firm catches them before default.</div>
-        <div class="bp-line"><b>Origin:</b> They took the MCA defensively (to bridge a gap, a slow season, payroll), rarely for luxury; 45% give a defensive reason outright on the call.</div>
-        <div class="bp-line"><b>Trigger:</b> They answer the call when the pain gets acute — 2 in 3 (66%) surface one on the call: an unpayable debit, a UCC lien or a lawsuit; and 1 in 3 were already burned by a prior broker.</div>
-      </div>
-      <div class="bp-help">What hurts them and why they answer the call</div>
-    </div>
-
-    <div class="bp-field">
-      <div class="bp-label"><span class="n">03</span> Buying drivers</div>
-      <div class="bp-box">
-        <div class="bp-line"><b>Relief now:</b> The main driver — the affordable payment is the pull in 90% of won deals. They close on hearing the new number (“that one I can pay without sweating”).</div>
-        <div class="bp-line"><b>Legal protection:</b> Stop the harassment, the lawsuits and the liens, with attorneys on their side — 24% ask for it directly.</div>
-        <div class="bp-line"><b>Get unstuck:</b> Escape the trap and unblock real credit (an SBA, a line) — a driver for 12%.</div>
-        <div class="bp-line"><b>Fairness:</b> Pay what's fair, not the predatory rate or the inflated fees.</div>
-        <div class="bp-line"><b>The key:</b> They want to pay (“I'm not running from it”) — 1 in 2 (48%) say it outright. The angle that closes is restructure, not erase: a payment 50 to 70% lower and attorneys who shield them.</div>
-      </div>
-      <div class="bp-help">What motivates them to do MCA debt settlement · dominant emotion: overwhelm + anger at being deceived</div>
-    </div>
-
-    <div class="bp-field">
-      <div class="bp-label"><span class="n">04</span> Typical objections &amp; how to handle them</div>
-      <div class="bp-box">
-        <div class="bp-line"><b>“Is this different from the one that already scammed me?”</b> (raised in 25% of calls) → We're attorney-led from the start; we do this daily with their same lenders and cut the fees, charging nothing upfront.</div>
-        <div class="bp-line"><b>“Will they keep harassing me or sue me?”</b> (24%) → With power of attorney we take over all communication, the new agreement supersedes the original, and we handle the UCC/COJ.</div>
-        <div class="bp-line"><b>“Do I have to pay upfront?”</b> (31%) → No upfront (or just $500 to open escrow); the fee is already baked into the reduced payment.</div>
-        <div class="bp-line"><b>“What about my credit? I don't want another MCA.”</b> (13%) → It's not a loan or a consolidation, it's restructuring; MCAs don't report to credit.</div>
-        <div class="bp-line"><b>“Let me think about it or talk to my partner.”</b> (22%) → Anchor to the next debit: “we stop tomorrow's draft.” It's the weakest point of the close.</div>
-      </div>
-      <div class="bp-help">Objection handling — the typical objection and the line that disarms it (gold for the SMS copy)</div>
-    </div>
-
-    <div class="bp-field bp-wide">
-      <div class="bp-label"><span class="n">05</span> Communication style</div>
-      <div class="bp-box">
-        <div class="bp-line"><b>Talks money like this:</b> In dollars per week or per day, never in APR — 91% of them. Wants “one single monthly payment”.</div>
-        <div class="bp-line"><b>Names their lenders:</b> 88% name them — OnDeck, Forward, Rapid… Saying “we know those” builds instant trust.</div>
-        <div class="bp-line"><b>Metrics they watch:</b> The weekly or daily payment amount and the % reduction; not the term or the rate.</div>
-        <div class="bp-line"><b>Their phrases:</b> <q>It's killing me</q> · <q>strangling my working capital</q> · <q>borrowing from Peter to pay Paul</q> · <q>I'm not running from it</q> · <q>I'm the one that got it, I wanna pay it</q>.</div>
-      </div>
-      <div class="bp-help">Their words and the metrics they watch — to mirror in the SMS copy</div>
-    </div>
-
+  <div class="controls" style="margin-top:22px">
+    <div class="grp"><span class="lbl">Vertical</span><div class="grp" id="pTabs"></div></div>
+    <button class="pill" id="pCfgBtn" onclick="pToggleCfg()" title="Choose which closing pipelines feed this persona">⚙ Pipelines</button>
+    <button class="pill" id="pGenBtn" onclick="pRegenerate()" title="Re-reads the won calls and rewrites the persona">↻ Regenerate</button>
   </div>
+  <div id="pCfg" hidden></div>
+  <div id="pRun" hidden></div>
+  <div id="pBody"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
 </div>
+
 
 <!-- ======================= GENERADOR (FASE 3) ======================= -->
 <div id="view-generador" class="view gv" hidden>
@@ -336,6 +286,10 @@ tr.can{cursor:pointer}
     <div class="gfield">
       <label>Data window</label>
       <select id="g_win"><option value="30">30 days</option><option value="14">14 days</option><option value="7">7 days</option></select>
+    </div>
+    <div class="gfield">
+      <label>Buyer persona</label>
+      <select id="g_persona"><option value="mca">MCA</option></select>
     </div>
     <div class="gfield gf-wide gf-actions">
       <button class="gbtn" id="genBtn" onclick="genRun()">Generate sequences</button>
@@ -356,15 +310,218 @@ function opParam(){ return ""; }
 function opFail(d){ return false; }
 var DATA=null;
 var ORDER=["cc","cold","defdec"];
-var ST={win:30, tab:"cc", sort:"pos", metric:"reply", branch:"All"};
+var ST={win:30, tab:"cc", sort:"pos", metric:"reply", branch:"All", persona:"mca"};
 var EXP={}; // secuencias con el desglose por rama abierto, por key
 
 function showTab(v){
   document.querySelectorAll(".tab").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-view")==v)});
-  document.getElementById("view-rendimiento").hidden = v!="rendimiento";
-  document.getElementById("view-persona").hidden = v!="persona";
-  document.getElementById("view-generador").hidden = v!="generador";
+  document.querySelectorAll(".view").forEach(function(el){el.hidden = el.id!="view-"+v});
+  if(v=="persona") pBoot();
   window.scrollTo(0,0);
+}
+
+/* ================= BUYER PERSONA =================
+   Las 5 secciones son fijas y su número/título/ayuda son copy de ACÁ, no del
+   modelo: por eso el layout no puede romperse por lo que se le ocurra escribir
+   a la IA. Ella solo llena las líneas. */
+var PSEC=[
+  {id:"firmographics", no:"01", title:"Firmographics",
+   help:"Industry, geography and track record of the businesses that close"},
+  {id:"pain_context", no:"02", title:"Pain points &amp; context",
+   help:"What hurts them and why they answer the call"},
+  {id:"buying_drivers", no:"03", title:"Buying drivers",
+   help:"What motivates them to close"},
+  {id:"objections", no:"04", title:"Typical objections &amp; how to handle them",
+   help:"The typical objection and the line that disarms it (gold for the SMS copy)"},
+  {id:"voice", no:"05", title:"Communication style",
+   help:"Their words and the metrics they watch — to mirror in the SMS copy"}
+];
+var PERSONAS=null, PIPES=null;
+
+// El texto del modelo se escapa PRIMERO y recién después se le permiten dos
+// cosas: **negrita** y "comillas". El endpoint es abierto, así que el render
+// nunca confía en lo que viene de la base.
+function rich(s){
+  return esc(s).replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>")
+               .replace(/&quot;([^&]*?)&quot;/g,"<q>$1</q>");
+}
+
+function pBoot(){
+  if(PERSONAS) return;
+  fetch(EP+"?action=personas").then(function(r){return r.json()}).then(function(d){
+    PERSONAS = Array.isArray(d)?d:[];
+    if(!ST.persona || !PERSONAS.some(function(p){return p.key==ST.persona}))
+      ST.persona = PERSONAS.length?PERSONAS[0].key:"mca";
+    pTabs(); pLoad(); pFillGenSelect();
+  }).catch(function(e){
+    document.getElementById("pBody").innerHTML='<div class="gen-err">Could not load the personas: '+esc(String(e))+'</div>';
+  });
+}
+function pTabs(){
+  var H=PERSONAS.map(function(p){
+    return '<span class="pill'+(p.key==ST.persona?' on':'')+'" onclick="pPick(\''+esc(p.key)+'\')">'+esc(p.label)+'</span>';
+  }).join("");
+  H+='<span class="pill" onclick="pNew()" title="Add another vertical">+ New</span>';
+  document.getElementById("pTabs").innerHTML=H;
+}
+function pPick(k){ ST.persona=k; pTabs(); document.getElementById("pCfg").hidden=true; pLoad(); }
+function pFillGenSelect(){
+  var sel=document.getElementById("g_persona"); if(!sel||!PERSONAS) return;
+  var prev=sel.value;
+  sel.innerHTML=PERSONAS.map(function(p){return '<option value="'+esc(p.key)+'">'+esc(p.label)+'</option>'}).join("");
+  if(PERSONAS.some(function(p){return p.key==prev})) sel.value=prev;
+}
+function pCur(){ return (PERSONAS||[]).filter(function(p){return p.key==ST.persona})[0]||null; }
+
+function pLoad(){
+  var body=document.getElementById("pBody");
+  body.innerHTML='<div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div>';
+  fetch(EP+"?action=persona_data&key="+encodeURIComponent(ST.persona))
+    .then(function(r){return r.json()}).then(function(d){ pRender(d); })
+    .catch(function(e){ body.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
+}
+
+function pRender(d){
+  var body=document.getElementById("pBody");
+  if(d.error){ body.innerHTML='<div class="gen-err">'+esc(d.error)+'</div>'; return; }
+  var doc=d.doc;
+  if(!doc){
+    body.innerHTML='<div class="note" style="margin-top:26px">No persona generated for <b>'+esc(d.label||ST.persona)
+      +'</b> yet. Hit <b>↻ Regenerate</b> to read its won calls and write one.</div>';
+    return;
+  }
+  var n=doc.sample&&doc.sample.deals||0;
+  var pipes=(doc.sample&&doc.sample.pipelines||[]).join(" + ");
+  var H='<div class="sub" style="margin-top:22px">The profile of those who close · from <b>'+n+' won deal'+(n==1?'':'s')+'</b>'
+      + (pipes?' in '+esc(pipes):'')
+      + (doc.source&&doc.source.label?' · <span style="opacity:.65">'+esc(doc.source.label)+'</span>':'')
+      + (d.at?' · <span style="opacity:.6">updated '+ago(d.at)+' ago</span>':'')+'</div>';
+
+  // Muestra chica: se dice el N real y por qué no hay porcentajes. Es parte del
+  // dato, no una nota al pie.
+  if(n < (d.minSample||15)){
+    H+='<div class="note"><b>Small sample:</b> this persona rests on <b>'+n+'</b> won deal'+(n==1?'':'s')
+      + (pipes?' across '+esc(pipes):'')
+      + '. Treat it as directional, not statistical — that is why it carries no percentages. It sharpens as more deals close.'
+      + ((doc.caveats&&doc.caveats.length)?'<br><br>'+doc.caveats.map(function(c){return '· '+esc(c)}).join('<br>'):'')
+      + '</div>';
+  }
+
+  var secs=doc.sections||[];
+  var shown=PSEC.filter(function(m){ var s=byId(secs,m.id); return s&&s.lines&&s.lines.length; });
+  H+='<div class="bp-grid">'+shown.map(function(m,i){
+    var s=byId(secs,m.id);
+    var wide=(i==shown.length-1 && shown.length%2==1)?' bp-wide':'';
+    return '<div class="bp-field'+wide+'">'
+      + '<div class="bp-label"><span class="n">'+m.no+'</span> '+m.title+'</div>'
+      + '<div class="bp-box">'
+      + s.lines.map(function(l){
+          return '<div class="bp-line"'+(l.evidenceN?' title="'+l.evidenceN+' of '+n+' deals"':'')+'>'
+               + (l.label?'<b>'+rich(l.label)+':</b> ':'')+rich(l.text)+'</div>';
+        }).join("")
+      + '</div><div class="bp-help">'+m.help+'</div></div>';
+  }).join("")+'</div>';
+  body.innerHTML=H;
+}
+function byId(arr,id){ return (arr||[]).filter(function(x){return x.id==id})[0]||null; }
+
+/* ---- selección de pipelines: acá es donde se suma un buyer nuevo ---- */
+function pToggleCfg(){
+  var el=document.getElementById("pCfg");
+  if(!el.hidden){ el.hidden=true; return; }
+  el.hidden=false;
+  el.innerHTML='<div class="sub" style="margin-top:18px"><span class="spin"></span>Reading the pipelines from GoHighLevel…</div>';
+  (PIPES?Promise.resolve({pipelines:PIPES}):fetch(EP+"?action=ghl_pipelines").then(function(r){return r.json()}))
+    .then(function(d){
+      if(d.error){ el.innerHTML='<div class="gen-err">'+esc(d.error)+'</div>'; return; }
+      PIPES=d.pipelines; pCfgRender();
+    }).catch(function(e){ el.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
+}
+function pCfgRender(){
+  var cur=pCur()||{key:ST.persona,label:ST.persona,pipelines:[],minSample:15};
+  var on={}; (cur.pipelines||[]).forEach(function(p){on[p.id]=1});
+  var boxes=PIPES.map(function(p){
+    return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13.5px;line-height:1.4;padding:5px 0;cursor:pointer">'
+      + '<input type="checkbox" data-pid="'+esc(p.id)+'" data-pname="'+esc(p.name)+'"'+(on[p.id]?' checked':'')+' style="margin-top:2px">'
+      + '<span>'+esc(p.name)+(p.closing?'':' <span style="color:var(--muted-2)">· not a closing pipeline</span>')+'</span></label>';
+  }).join("");
+  document.getElementById("pCfg").innerHTML =
+    '<div class="gform" style="grid-template-columns:1fr 1fr">'
+    + '<div class="gfield"><label>Name</label><input id="pf_label" value="'+esc(cur.label)+'"></div>'
+    + '<div class="gfield"><label>Small-sample threshold <span class="opt">(warn below this many won deals)</span></label>'
+    + '<input id="pf_min" type="number" min="1" max="500" value="'+(cur.minSample||15)+'"></div>'
+    + '<div class="gfield gf-wide"><label>Closing pipelines that feed this persona</label>'
+    + '<div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--background)">'+boxes+'</div></div>'
+    + '<div class="gfield gf-wide gf-actions"><button class="gbtn" onclick="pSave()">Save</button>'
+    + '<span class="ghint">Won deals in these pipelines are the evidence. Saving does not regenerate — hit ↻ Regenerate after.</span></div></div>';
+}
+function pSave(){
+  var picked=[].slice.call(document.querySelectorAll('#pCfg input[type=checkbox]'))
+    .filter(function(c){return c.checked})
+    .map(function(c){return {id:c.getAttribute("data-pid"), name:c.getAttribute("data-pname")}});
+  var body={ key:ST.persona, label:document.getElementById("pf_label").value.trim()||ST.persona,
+             minSample:parseInt(document.getElementById("pf_min").value)||15, pipelines:picked };
+  fetch(EP+"?action=persona_save",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){ alert(d.error); return; }
+      PERSONAS=null; document.getElementById("pCfg").hidden=true; pBoot();
+    }).catch(function(e){ alert(String(e)); });
+}
+function pNew(){
+  var k=prompt("Key for the new vertical (lowercase, no spaces — e.g. 'personal_loans')");
+  if(!k) return;
+  k=k.trim().toLowerCase();
+  if(!/^[a-z0-9_-]{2,24}$/.test(k)){ alert("Only a-z, 0-9, _ and -, between 2 and 24 characters."); return; }
+  var label=prompt("Display name","")||k;
+  fetch(EP+"?action=persona_save",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({key:k,label:label,pipelines:[],minSample:15,sort:900})})
+    .then(function(r){return r.json()}).then(function(d){
+      if(d.error){ alert(d.error); return; }
+      PERSONAS=null; ST.persona=k; pBoot(); setTimeout(pToggleCfg,400);
+    });
+}
+
+/* ---- Regenerar: scan -> transcribe -> extract -> build.
+   Todo el estado vive en la base, así que recargar a mitad de camino se
+   reengancha a los mismos contadores en vez de empezar de nuevo. ---- */
+var PRUN=false;
+function pStep(t){ var el=document.getElementById("pRun"); el.hidden=false; el.innerHTML='<div class="note"><span class="spin"></span>'+t+'</div>'; }
+function pDone(t,bad){ var el=document.getElementById("pRun"); el.hidden=false;
+  el.innerHTML='<div class="'+(bad?'gen-err':'note')+'">'+t+'</div>'; }
+function pCall(action,extra){
+  return fetch(EP+"?action="+action+"&key="+encodeURIComponent(ST.persona)+(extra||"")).then(function(r){return r.json()});
+}
+function pRegenerate(){
+  if(PRUN) return;
+  var cur=pCur();
+  if(cur && !(cur.pipelines||[]).length){ alert("This persona has no pipelines yet — pick them under ⚙ Pipelines first."); return; }
+  PRUN=true;
+  var btn=document.getElementById("pGenBtn"); btn.classList.add("on"); btn.style.pointerEvents="none";
+  var finish=function(msg,bad){ PRUN=false; btn.classList.remove("on"); btn.style.pointerEvents=""; pDone(msg,bad); };
+
+  var drain=function(action,label,then){
+    pStep(label);
+    pCall(action,"&ms=100000").then(function(d){
+      if(d.error){ finish("<b>Error:</b> "+esc(d.error), true); return; }
+      if(d.remaining>0){ pStep(label+" · <b>"+d.remaining+"</b> left"); setTimeout(function(){drain(action,label,then)},600); }
+      else then(d);
+    }).catch(function(e){ finish("<b>Network error:</b> "+esc(String(e)), true); });
+  };
+
+  drain("persona_scan","Finding the won deals…",function(sc){
+    var note=sc.won!=null?(sc.won+" won deals · "+(sc.withCalls||0)+" with calls"+(sc.noCalls?" · "+sc.noCalls+" without any":"")):"";
+    drain("persona_transcribe","Reading the calls… "+note,function(){
+      drain("persona_extract","Understanding each buyer…",function(){
+        pStep("Writing the persona…");
+        pCall("persona_build").then(function(b){
+          if(b.error){ finish("<b>Error:</b> "+esc(b.error), true); return; }
+          PERSONAS=null;
+          finish("✓ Persona updated · <b>"+b.deals+"</b> won deal"+(b.deals==1?"":"s")+" · confidence "+esc(b.confidence)+" · "+esc(b.source));
+          pLoad(); pBoot();
+        }).catch(function(e){ finish("<b>Network error:</b> "+esc(String(e)), true); });
+      });
+    });
+  });
 }
 
 function genRun(){
@@ -374,7 +531,8 @@ function genRun(){
     messages:parseInt(document.getElementById("g_msgs").value)||6,
     variants:1,
     lang:"English",
-    win:document.getElementById("g_win").value
+    win:document.getElementById("g_win").value,
+    persona:document.getElementById("g_persona").value
   };
   btn.disabled=true; btn.textContent="Generating…";
   out.innerHTML='<div class="sub" style="margin-top:24px"><span class="spin"></span>The AI is writing the sequences…</div>';

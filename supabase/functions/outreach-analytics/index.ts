@@ -7,13 +7,6 @@ const WINDOW_DAYS = 30;
 const GEN_MODEL = "claude-sonnet-5";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Workflow IDs (dinámicos desde GHL)
-const WORKFLOW_IDS: Record<string, string> = {
-  cc: "e28be9d2-ce89-4b6f-b85a-494d08912e58",
-  cold: "b985c65c-a0c3-4cdc-a737-7da93b77e933",
-  defdec: "69533301-b2f3-445e-8ebe-3f2227ba8c8e",
-};
-
 // ---- Las 3 secuencias (dinámicas desde Supabase) ----
 // Se cargan desde DB en lugar de estar hardcodeadas.
 // Esto permite que cambios en los nombres de workflows en GHL se reflejen automáticamente.
@@ -58,30 +51,7 @@ async function loadWorkflows() {
   }
 }
 
-async function initMessageCache(cfg: Record<string, string>) {
-  try {
-    const key = cfg.ghl_api_key;
-    await Promise.all(["cc", "cold", "defdec"].map(seq => getWorkflowMessages(seq, key)));
-  } catch (_) {
-    // Fallback silencioso a OFFICIAL si falla
-  }
-}
 
-async function getSequenceFromGHLTags(contactId: string, key: string): Promise<string> {
-  try {
-    const url = BASE + "/contacts/" + contactId;
-    const data = await gget(url, key);
-    const tags = (data?.contact?.tags || data?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
-
-    if (tags.includes("secuencia bfcb")) return "cold";
-    if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) return "cc";
-    if (tags.includes("sent from partner")) return "defdec";
-
-    return "none";
-  } catch (_) {
-    return "none";
-  }
-}
 
 async function getSequenceAndBranchFromGHLTags(contactId: string, key: string): Promise<{sequence: string, branch: string}> {
   try {
@@ -106,28 +76,6 @@ async function getSequenceAndBranchFromGHLTags(contactId: string, key: string): 
   }
 }
 
-async function getWorkflowMessages(sequence: string, key: string): Promise<string[]> {
-  try {
-    if (!WORKFLOW_IDS[sequence]) return OFFICIAL[sequence] || [];
-    const workflowId = WORKFLOW_IDS[sequence];
-    const url = BASE + "/workflows/" + workflowId;
-    const data = await gget(url, key);
-    const actions = data?.actions || [];
-    const messages: string[] = [];
-    for (const action of actions) {
-      if ((action.type === "send_sms" || action.actionType === "send_sms") && action.data?.message) {
-        let msg = action.data.message;
-        msg = msg.replace(/\{\{contact\.first_name\}\}/g, "{nombre}");
-        msg = msg.replace(/\{\{contact\.credit_card_debt\}\}/g, "{monto}");
-        msg = msg.replace(/\{\{user\.name\}\}/g, "{opener}");
-        messages.push(msg);
-      }
-    }
-    return messages.length ? messages : OFFICIAL[sequence] || [];
-  } catch (_) {
-    return OFFICIAL[sequence] || [];
-  }
-}
 
 function whichWorkflow(body?: string): string {
   const b = (body || "").toLowerCase();
@@ -205,39 +153,12 @@ function skel(t: string): string {
   return (t || "").toLowerCase().replace(/\{+[^{}]*\}+/g, "v").replace(/[^a-z0-9]/g, "");
 }
 
-// Caché dinámico de mensajes por secuencia
-const MESSAGES_CACHE: Record<string, string[]> = {};
-async function getCachedMessages(sequence: string, key: string): Promise<string[]> {
-  if (!MESSAGES_CACHE[sequence]) {
-    MESSAGES_CACHE[sequence] = await getWorkflowMessages(sequence, key);
-  }
-  return MESSAGES_CACHE[sequence];
-}
-
-async function buildMessageKeys(sequence: string, key: string): Promise<{ keys: Set<string>; text: Record<string, string> }> {
-  const messages = await getCachedMessages(sequence, key);
-  const keys = new Set<string>();
-  const text: Record<string, string> = {};
-  for (const m of messages) {
-    const sk = skel(m);
-    if (sk.length >= 4) {
-      keys.add(sk);
-      text[sk] = m;
-    }
-  }
-  return { keys, text };
-}
-
-const OFFICIAL_KEYS: Record<string, Set<string>> = {};
 const OFF_TEXT: Record<string, Record<string, string>> = {};
 for (const k of Object.keys(OFFICIAL)) {
-  OFFICIAL_KEYS[k] = new Set();
   OFF_TEXT[k] = {};
   for (const m of OFFICIAL[k]) {
     const sk = skel(m);
-    if (sk.length < 4) continue;
-    OFFICIAL_KEYS[k].add(sk);
-    OFF_TEXT[k][sk] = m;
+    if (sk.length >= 4) OFF_TEXT[k][sk] = m;
   }
 }
 
@@ -2021,14 +1942,18 @@ function personaAggregate(extracts: any[]) {
   };
 }
 
+// El modelo está atado a copiar los números TAL CUAL aparecen acá, así que se
+// formatean con separador de miles antes: si no, escribe "$12500".
+function usd(v: number | null): string { return v == null ? "-" : "$" + v.toLocaleString("en-US"); }
+
 function aggMd(a: any): string {
   const L: string[] = [];
   const line = (k: string, v: string) => L.push(k + ": " + v);
   line("N", a.n + " won deals (each = one distinct buyer)");
   if (a.industries.length) line("industry", a.industries.map((x: any) => x.k + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
   if (a.states.length) line("states", a.states.map((x: any) => x.k + " " + x.n).join(" · "));
-  if (a.debt.stated) line("debt_total_usd", "median $" + a.debt.median + ", range $" + a.debt.min + "-$" + a.debt.max + ", stated by " + a.debt.stated + "/" + a.n);
-  if (a.payment.stated) line("payment", "median $" + a.payment.median + ", stated by " + a.payment.stated + "/" + a.n
+  if (a.debt.stated) line("debt_total_usd", "median " + usd(a.debt.median) + ", range " + usd(a.debt.min) + "-" + usd(a.debt.max) + ", stated by " + a.debt.stated + "/" + a.n);
+  if (a.payment.stated) line("payment", "median " + usd(a.payment.median) + ", stated by " + a.payment.stated + "/" + a.n
     + (a.payment.cadence.length ? " · cadence " + a.payment.cadence.map((x: any) => x.k + " " + x.n).join("/") : ""));
   if (a.positions.stated) line("positions", "median " + a.positions.median + ", 2+ in " + a.positions.twoPlus + "/" + a.positions.stated + " stated");
   if (a.years.stated) line("years_in_business", "median " + a.years.median + ", stated by " + a.years.stated + "/" + a.n);
@@ -2243,9 +2168,6 @@ Deno.serve(async (req) => {
 
   // Cargar workflows dinámicos desde Supabase (en lugar de hardcodeados)
   try { await loadWorkflows(); } catch (e) { console.warn("workflows load failed, using defaults:", e); }
-
-  // Inicializar caché de mensajes desde GHL (100% dinámico)
-  try { await initMessageCache(cfg); } catch (e) { console.warn("message cache init failed, using OFFICIAL:", e); }
 
   // App ABIERTA: no hay clave de operador. Cualquiera con el link puede ejecutar TODAS las
   // acciones (incluidas las que mutan la base o gastan API de GHL/Anthropic). El link es la
