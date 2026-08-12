@@ -901,13 +901,22 @@ function perfMd(snap: any, win: string): string {
   }
   return md;
 }
-async function context(win: string): Promise<string> {
+// Busca el doc de una persona con fallback al 'persona' escrito a mano: mientras
+// una vertical no haya corrido su primera generación, los consumidores siguen
+// recibiendo el doc viejo en vez de romperse.
+async function personaDocMd(c: Client, personaKey: string): Promise<string> {
+  const p = await c.queryObject<{ md: string }>(
+    "select md from sms_analytics.context_docs where key = any($1::text[]) order by array_position($1::text[], key) limit 1",
+    [["persona_" + personaKey, "persona"]]);
+  return (p.rows[0] && p.rows[0].md) || "(persona doc missing)";
+}
+
+async function context(win: string, personaKey = "mca"): Promise<string> {
   return await withDb(async (c) => {
     const q = await c.queryObject<{ data: any; created_at: string }>(
       "select data, created_at from sms_analytics.snapshots_v2 order by id desc limit 1");
     const snap = q.rows[0] ? { ...q.rows[0].data, snapshotAt: q.rows[0].created_at } : null;
-    const p = await c.queryObject<{ md: string }>("select md from sms_analytics.context_docs where key='persona'");
-    const personaMd = (p.rows[0] && p.rows[0].md) || "(persona doc missing)";
+    const personaMd = await personaDocMd(c, personaKey);
     const head = "# OUTREACH ANALYTICS — AI CONTEXT PACK\n"
       + "_Standardized markdown for a downstream sequence-generation AI._\n"
       + "_Panel 1 = SMS PERFORMANCE (what empirically converts). Panel 2 = BUYER PERSONA (who closes & why)._\n"
@@ -1107,14 +1116,14 @@ async function generate(cfg: Record<string, string>, body: any) {
   const goal = String(brief.goal || "cold outreach to stacked owners who are current but drowning").slice(0, 400);
   const audience = String(brief.audience || "use the persona as-is").slice(0, 400);
   const lang = String(brief.lang || "English").slice(0, 40);
+  const personaKey = keyOk(String(brief.persona || "")) ? String(brief.persona) : "mca";
 
   const inputs = await withDb(async (c) => {
     const q = await c.queryObject<{ data: any; created_at: string }>(
       "select data, created_at from sms_analytics.snapshots_v2 order by id desc limit 1");
     const snap = q.rows[0] ? { ...q.rows[0].data, snapshotAt: q.rows[0].created_at } : null;
-    const p = await c.queryObject<{ md: string }>("select md from sms_analytics.context_docs where key='persona'");
     const b = await c.queryObject<{ md: string }>("select md from sms_analytics.context_docs where key='brandvoice'");
-    return { perf: perfMd(snap, win), persona: (p.rows[0] && p.rows[0].md) || "(none)", brand: (b.rows[0] && b.rows[0].md) || "(none)" };
+    return { perf: perfMd(snap, win), persona: await personaDocMd(c, personaKey), brand: (b.rows[0] && b.rows[0].md) || "(none)" };
   });
 
   const sys = [
@@ -1242,7 +1251,7 @@ async function generate(cfg: Record<string, string>, body: any) {
           ? "El modelo no devolvió texto (stop_reason=" + (stopReason || "?") + ", " + thinkTok + " tokens de razonamiento). Probable corte por thinking/max_tokens."
           : "El modelo devolvió texto que no es JSON válido (stop_reason=" + (stopReason || "?") + "). Ver el texto crudo abajo."));
   return { ok: true, model, elapsedMs: Date.now() - t0, stop_reason: stopReason,
-    brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win },
+    brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win, persona: personaKey },
     compliance: { checked, flagged, removed, repaired, repairPasses, maxChars: SMS_MAX_CHARS,
       note: "Only messages that pass every hardcoded rule are offered — any that couldn't be repaired in " + MAX_REPAIR_PASSES + " passes are dropped, not shown. Even so, cold MCA/debt-restructuring outbound is a category formally prohibited by T-Mobile/Twilio/TCR: deliverability depends on number reputation, consent and rotation, not just the copy." },
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text, diag: diag };
@@ -1531,7 +1540,35 @@ async function personaData(key: string) {
 // llamada de 20 min son ~19 MB en RAM— y no el rate limit; y cada fila que sale
 // de 'queued' ya no vuelve nunca, que es lo que hace que esto no se pueda usar
 // para quemar la cuota de Deepgram.
-async function transcribeOne(cfg: Record<string, string>, row: any): Promise<{ status: string; err?: string; words?: number; lang?: string; bytes?: number; text?: string }> {
+type TrOut = { status: string; err?: string; words?: number; lang?: string; bytes?: number; text?: string; durationS?: number };
+
+// Las llamadas de los AI setters ya vienen transcriptas de Retell: gratis,
+// instantáneo y más fiel que re-transcribir el audio. No pasan por Deepgram.
+async function transcribeRetell(cfg: Record<string, string>, row: any): Promise<TrOut> {
+  const rkey = (cfg.retell_api_key || "").trim();
+  if (!rkey) return { status: "failed", err: "falta retell_api_key en sms_analytics.config" };
+  let r: Response;
+  try {
+    r = await fetch("https://api.retellai.com/v2/get-call/" + row.ext_id, {
+      headers: { Authorization: "Bearer " + rkey },
+    });
+  } catch (e) { return { status: "retry", err: "retell fetch: " + String(e) }; }
+  if (r.status === 404) return { status: "no_audio", err: "retell 404 (llamada fuera de retención)" };
+  if (!r.ok) {
+    const body = (await r.text()).slice(0, 200);
+    return { status: r.status >= 400 && r.status < 500 ? "failed" : "retry", err: "retell " + r.status + ": " + body };
+  }
+  const j = await r.json();
+  const text = String(j?.transcript || "").trim();
+  const durationS = Math.round((Number(j?.duration_ms) || 0) / 1000) || undefined;
+  const words = text ? text.split(/\s+/).length : 0;
+  if (words < MIN_TRANSCRIPT_WORDS)
+    return { status: "short", err: words + " palabras", words, text, durationS };
+  return { status: "done", words, lang: j?.call_analysis?.detected_language || null, text, durationS };
+}
+
+async function transcribeOne(cfg: Record<string, string>, row: any): Promise<TrOut> {
+  if (row.source === "retell") return await transcribeRetell(cfg, row);
   const loc = cfg.ghl_location, gkey = cfg.ghl_api_key;
   const base = BASE + "/conversations/messages/" + row.message_id + "/locations/" + loc + "/recording";
 
@@ -1574,20 +1611,19 @@ async function transcribeOne(cfg: Record<string, string>, row: any): Promise<{ s
 
 async function personaTranscribe(cfg: Record<string, string>, key: string | null, budgetMs: number, limit: number) {
   const t0 = Date.now();
-  if (!(cfg.deepgram_api_key || "").trim())
-    return { error: "Falta 'deepgram_api_key' en sms_analytics.config." };
+  const hasDg = !!(cfg.deepgram_api_key || "").trim();
 
   // Techo diario de minutos: incluso si el scan se abusara, el gasto queda acotado.
+  // Solo cuenta lo que pasa por Deepgram — Retell es gratis y no consume cuota.
   const cap = parseInt(cfg.persona_daily_minutes_cap || "") || DEFAULT_DAILY_MINUTES_CAP;
   const usedMin = await withDb(async (c) => {
     const r = await c.queryObject<{ s: number }>(
       `select coalesce(sum(coalesce(duration_s, 600)), 0)::float / 60 as s
          from sms_analytics.call_transcript
-        where status in ('done','short') and done_at > now() - interval '24 hours'`);
+        where source = 'ghl' and status in ('done','short') and done_at > now() - interval '24 hours'`);
     return Number(r.rows[0]?.s || 0);
   });
-  if (usedMin >= cap)
-    return { error: "tope diario alcanzado (" + Math.round(usedMin) + "/" + cap + " min). Subí persona_daily_minutes_cap si hace falta." };
+  const dgOpen = hasDg && usedMin < cap;
 
   let done = 0, failed = 0, noAudio = 0, short = 0, minutes = 0;
   const claimed = new Set<string>();
@@ -1602,8 +1638,9 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
             select t.id from sms_analytics.call_transcript t
             ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $2" : ""}
             where t.status = 'queued' and t.attempts < 3
+              ${dgOpen ? "" : "and t.source <> 'ghl'"}
             order by t.attempts, t.id limit $1 for update skip locked)
-          returning id, message_id, rec_index, duration_s, attempts`,
+          returning id, message_id, rec_index, duration_s, attempts, source, ext_id`,
         key ? [take, key] : [take]);
       return r.rows;
     });
@@ -1627,11 +1664,12 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
         }
         await c.queryArray(
           `update sms_analytics.call_transcript
-              set status=$2, err=$3, words=$4, lang=$5, bytes=$6, transcript=$7, done_at=now()
+              set status=$2, err=$3, words=$4, lang=$5, bytes=$6, transcript=$7,
+                  duration_s=coalesce($8, duration_s), done_at=now()
             where id=$1`,
           [row.id, res.status, res.err || null, res.words ?? null, res.lang ?? null,
-           res.bytes ?? null, res.text ?? null]);
-        if (res.status === "done") { done++; minutes += (row.duration_s || 0) / 60; }
+           res.bytes ?? null, res.text ?? null, res.durationS ?? null]);
+        if (res.status === "done") { done++; if (row.source === "ghl") minutes += (row.duration_s || 0) / 60; }
         else if (res.status === "short") short++;
         else if (res.status === "no_audio") noAudio++;
         else failed++;
@@ -1651,6 +1689,7 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
 
   return { key, done, failed, noAudio, short, remaining,
     minutes: Math.round(minutes * 10) / 10, dailyMinutesUsed: Math.round(usedMin),
+    deepgram: dgOpen ? "on" : (hasDg ? "tope diario alcanzado (" + Math.round(usedMin) + "/" + cap + " min)" : "sin deepgram_api_key — solo se procesan llamadas de Retell"),
     elapsedMs: Date.now() - t0 };
 }
 
@@ -1772,42 +1811,52 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
     const results = await pool(batch, 6, async (o: any) => {
       const cd = await gget(BASE + "/conversations/search?locationId=" + loc + "&contactId=" + o.contact_id, gkey);
       const convs = cd?.conversations ?? [];
-      const calls: any[] = [];
+      const ghlCalls: any[] = [];    // TYPE_CALL: grabación en GHL -> Deepgram (cuesta)
+      const retellCalls: any[] = []; // TYPE_CUSTOM_CALL de Retell: transcripción nativa (gratis)
       for (const cv of convs.slice(0, 3)) {
         const md = await gget(BASE + "/conversations/" + cv.id + "/messages?limit=100", gkey);
         for (const m of (md?.messages?.messages ?? [])) {
-          if (m.messageType === "TYPE_CALL" && m.status === "completed")
-            calls.push({ id: m.id, conv: cv.id, dur: m.meta?.call?.duration ?? null, at: m.dateAdded || null });
+          if (m.status !== "completed") continue; // deja fuera los voicemails del setter
+          if (m.messageType === "TYPE_CALL")
+            ghlCalls.push({ id: m.id, conv: cv.id, dur: m.meta?.call?.duration ?? null,
+                            at: m.dateAdded || null, source: "ghl", ext: null });
+          else if (m.messageType === "TYPE_CUSTOM_CALL" && /^call_/.test(String(m.altId || "")))
+            retellCalls.push({ id: m.id, conv: cv.id, dur: null,
+                               at: m.dateAdded || null, source: "retell", ext: m.altId });
         }
       }
-      // La más larga gana. `duration` null NO es 0: GHL lo deja vacío justamente en
-      // las llamadas largas y transferidas, que son las que más nos interesan.
-      calls.sort((a, b) => {
+      // De las de GHL se encola SOLO la más larga, porque cada una cuesta un
+      // Deepgram. `duration` null NO es 0: GHL lo deja vacío justamente en las
+      // llamadas largas y transferidas, que son las que más nos interesan.
+      ghlCalls.sort((a, b) => {
         const da = a.dur == null ? Number.POSITIVE_INFINITY : a.dur;
         const db = b.dur == null ? Number.POSITIVE_INFINITY : b.dur;
         if (db !== da) return db - da;
         return String(b.at || "").localeCompare(String(a.at || ""));
       });
-      return { o, best: calls[0] || null, n: calls.length };
+      // Las de Retell son gratis, así que van todas: no hay que adivinar cuál es
+      // la buena y juntas describen mejor a la misma persona.
+      const picks = [...(ghlCalls[0] ? [ghlCalls[0]] : []), ...retellCalls.slice(0, 25)];
+      return { o, picks };
     });
 
     await withDb(async (c) => {
       for (const r of results) {
         if (!r) continue;
-        if (r.best) {
+        for (const p of r.picks) {
           const ins = await c.queryObject<{ id: bigint }>(
             `insert into sms_analytics.call_transcript
-               (pipeline_id,opportunity_id,contact_id,conversation_id,message_id,rec_index,call_at,duration_s)
-             values ($1,$2,$3,$4,$5,1,$6::timestamptz,$7)
+               (pipeline_id,opportunity_id,contact_id,conversation_id,message_id,rec_index,call_at,duration_s,source,ext_id)
+             values ($1,$2,$3,$4,$5,1,$6::timestamptz,$7,$8,$9)
              on conflict (message_id, rec_index) do nothing
              returning id`,
-            [r.o.pipeline_id, r.o.opportunity_id, r.o.contact_id, r.best.conv, r.best.id, r.best.at, r.best.dur]);
+            [r.o.pipeline_id, r.o.opportunity_id, r.o.contact_id, p.conv, p.id, p.at, p.dur, p.source, p.ext]);
           if (ins.rows.length) queued++; else alreadyQueued++;
-          withCalls++;
-        } else noCalls++;
+        }
+        if (r.picks.length) withCalls++; else noCalls++;
         await c.queryArray(
           `update sms_analytics.persona_won_opp set expanded=true, n_calls=$2 where opportunity_id=$1`,
-          [r.o.opportunity_id, r.n]);
+          [r.o.opportunity_id, r.picks.length]);
         expanded++;
       }
     });
@@ -1827,6 +1876,349 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
     wonByStatus: found.filter((f) => f.won_src !== "stage").length,
     wonByStage: found.filter((f) => f.won_src !== "status").length,
     expanded, withCalls, noCalls, queued, alreadyQueued, remaining, elapsedMs: Date.now() - t0 };
+}
+
+// ---- EXTRACT (etapa A): una ficha por COMPRADOR, no por audio ----------------
+// La unidad de una buyer persona es la persona, no la llamada: un contacto puede
+// tener varias llamadas y todas juntas describen a uno solo. Por eso el extract
+// vive en `persona_won_opp` y se arma concatenando TODAS las transcripciones de
+// ese contacto. Queda cacheado, así que un rebuild posterior no vuelve a pagarlo.
+//
+// La regla dura del prompt es `null` cuando el dato no se dijo: un campo vacío es
+// señal, uno inventado envenena la persona entera. Y el esquema no tiene campo
+// para nombre de persona ni de empresa — el anonimato es estructural, no un pedido.
+const EXTRACT_SCHEMA = '{"industry":"short label or null","years_in_business":null,'
+  + '"debt_total_usd":null,"n_positions":null,"payment_amount_usd":null,'
+  + '"payment_cadence":"weekly|daily|monthly|null","lenders":[],"language":"en|es|null",'
+  + '"geo_state":"2-letter US state or null","origin":"defensive|growth|null",'
+  + '"trigger":"short phrase or null","objections":[],"drivers":[],"wants_to_pay":null,'
+  + '"verbatims":[],"confidence":0.0}';
+
+async function extractOne(akey: string, text: string): Promise<any | null> {
+  const sys = [
+    "You read ONE prospect's sales call transcript(s) and return a single structured JSON card about the BUSINESS OWNER (the 'User' side), for aggregation into an anonymous buyer persona.",
+    "HARD RULES:",
+    "- Use null (or an empty array) whenever the transcript does not state something. NEVER infer, guess, or fill from general knowledge. A missing field is useful signal; a fabricated one is poison.",
+    "- NEVER output a person's name, business name, phone number, email or street address. There is no field for them. `lenders` holds only lender/creditor BRAND names (OnDeck, Rapid, Forward, a bank or card issuer) — never the merchant's own name.",
+    "- `verbatims`: at most 5, at most 12 words each, quoted from the OWNER only, and only if they contain nothing identifying.",
+    "- `objections` and `drivers`: short lowercase phrases (e.g. 'burned by a prior broker', 'no upfront fee', 'relief now'). Max 5 each.",
+    "- Amounts in plain USD numbers, no symbols or text ('$4.2k/week' -> payment_amount_usd 4200, payment_cadence 'weekly').",
+    "- `confidence` 0-1: how legible and substantive the transcript is. A mostly-empty or garbled call gets a low value.",
+    "Respond with ONLY valid JSON matching the schema. No markdown fences, no prose.",
+  ].join("\n");
+  let r: Response;
+  try {
+    r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      // max_tokens acota thinking + salida juntos; la ficha son ~300 tokens, 4000 deja aire.
+      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 4000, system: sys,
+        messages: [{ role: "user", content: "TRANSCRIPT(S):\n" + text.slice(0, 220000) + "\n\nReturn ONLY JSON in this shape:\n" + EXTRACT_SCHEMA }] }),
+    });
+  } catch (_) { return null; }
+  if (!r.ok) return null;
+  const j = await r.json();
+  const out = (j.content || []).map((b: any) => b.text || "").join("").trim();
+  try { return JSON.parse(out.replace(/^```(json)?\s*/i, "").replace(/\s*```$/i, "").trim()); } catch (_) { return null; }
+}
+
+async function personaExtract(cfg: Record<string, string>, key: string, budgetMs: number, limit: number) {
+  const t0 = Date.now();
+  const akey = (cfg.anthropic_api_key || "").trim();
+  if (!akey) return { error: "Falta 'anthropic_api_key' en sms_analytics.config." };
+  let done = 0, empty = 0, failed = 0;
+
+  while (Date.now() - t0 < budgetMs) {
+    if (limit > 0 && done + empty + failed >= limit) break;
+    const batch = await withDb(async (c) => {
+      const r = await c.queryObject<any>(
+        `select o.opportunity_id,
+                string_agg(t.transcript, E'\n\n---\n\n' order by t.call_at) as text
+           from sms_analytics.persona_won_opp o
+           join sms_analytics.persona_pipeline p on p.pipeline_id = o.pipeline_id and p.persona_key = $1
+           join sms_analytics.call_transcript t on t.opportunity_id = o.opportunity_id
+          where o.extract is null and t.status = 'done' and t.transcript is not null
+          group by o.opportunity_id
+          limit 4`, [key]);
+      return r.rows;
+    });
+    if (!batch.length) break;
+
+    const out = await pool(batch, 4, async (b: any) => ({ b, ex: await extractOne(akey, b.text) }));
+    await withDb(async (c) => {
+      for (const o of out) {
+        if (!o) { failed++; continue; }
+        if (!o.ex) { failed++; continue; }
+        await c.queryArray(
+          `update sms_analytics.persona_won_opp set extract=$2::jsonb, extract_at=now() where opportunity_id=$1`,
+          [o.b.opportunity_id, JSON.stringify(o.ex)]);
+        done++;
+      }
+    });
+    if (failed >= 8) break; // algo está roto de verdad; no seguir quemando API
+  }
+
+  const remaining = await withDb(async (c) => {
+    const r = await c.queryObject<{ n: bigint }>(
+      `select count(distinct o.opportunity_id)::bigint as n
+         from sms_analytics.persona_won_opp o
+         join sms_analytics.persona_pipeline p on p.pipeline_id = o.pipeline_id and p.persona_key = $1
+         join sms_analytics.call_transcript t on t.opportunity_id = o.opportunity_id
+        where o.extract is null and t.status = 'done'`, [key]);
+    return Number(r.rows[0].n);
+  });
+  await setPhase(key, remaining ? "extracting" : "generating",
+    remaining ? remaining + " compradores por leer" : null);
+  void empty;
+  return { key, done, failed, remaining, elapsedMs: Date.now() - t0 };
+}
+
+// ---- AGREGACIÓN: los números los calcula el código, nunca el modelo -----------
+// Esta es la línea que separa "una persona con datos" de "una IA que suena
+// convincente". El modelo recibe la tabla ya calculada y solo escribe la prosa.
+function med(xs: number[]): number | null {
+  if (!xs.length) return null;
+  const s = xs.slice().sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
+function pct(n: number, d: number): number { return d ? Math.round(1000 * n / d) / 10 : 0; }
+function tally(rows: any[], field: string, max = 8): { k: string; n: number }[] {
+  const m: Record<string, number> = {};
+  for (const r of rows) for (const v of (Array.isArray(r?.[field]) ? r[field] : [])) {
+    const k = String(v || "").trim().toLowerCase(); if (k) m[k] = (m[k] || 0) + 1;
+  }
+  return Object.entries(m).map(([k, n]) => ({ k, n })).sort((a, b) => b.n - a.n).slice(0, max);
+}
+
+function personaAggregate(extracts: any[]) {
+  const N = extracts.length;
+  const num = (f: string) => extracts.map((e) => Number(e?.[f])).filter((v) => Number.isFinite(v) && v > 0);
+  const debts = num("debt_total_usd"), pays = num("payment_amount_usd"), pos = num("n_positions"), yrs = num("years_in_business");
+  const es = extracts.filter((e) => String(e?.language || "").toLowerCase().startsWith("es")).length;
+  const wantsPay = extracts.filter((e) => e?.wants_to_pay === true).length;
+  const wantsPayStated = extracts.filter((e) => e?.wants_to_pay === true || e?.wants_to_pay === false).length;
+  const states = tally(extracts.map((e) => ({ s: e?.geo_state ? [e.geo_state] : [] })), "s", 8);
+  return {
+    n: N,
+    industries: tally(extracts.map((e) => ({ i: e?.industry ? [e.industry] : [] })), "i"),
+    states,
+    debt: { median: med(debts), min: debts.length ? Math.min(...debts) : null,
+            max: debts.length ? Math.max(...debts) : null, stated: debts.length },
+    payment: { median: med(pays), stated: pays.length,
+               cadence: tally(extracts.map((e) => ({ c: e?.payment_cadence ? [e.payment_cadence] : [] })), "c", 4) },
+    positions: { median: med(pos), stated: pos.length,
+                 twoPlus: pos.filter((v) => v >= 2).length },
+    years: { median: med(yrs), stated: yrs.length },
+    language: { spanish: es, share: pct(es, N) },
+    wantsToPay: { yes: wantsPay, stated: wantsPayStated },
+    objections: tally(extracts, "objections"),
+    drivers: tally(extracts, "drivers"),
+    triggers: tally(extracts.map((e) => ({ t: e?.trigger ? [e.trigger] : [] })), "t"),
+    lenders: tally(extracts, "lenders", 10),
+    verbatims: [...new Set(extracts.flatMap((e) => Array.isArray(e?.verbatims) ? e.verbatims : [])
+      .map((v: any) => String(v || "").trim()).filter((v: string) => v.length > 3 && v.length < 90))].slice(0, 40),
+  };
+}
+
+function aggMd(a: any): string {
+  const L: string[] = [];
+  const line = (k: string, v: string) => L.push(k + ": " + v);
+  line("N", a.n + " won deals (each = one distinct buyer)");
+  if (a.industries.length) line("industry", a.industries.map((x: any) => x.k + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
+  if (a.states.length) line("states", a.states.map((x: any) => x.k + " " + x.n).join(" · "));
+  if (a.debt.stated) line("debt_total_usd", "median $" + a.debt.median + ", range $" + a.debt.min + "-$" + a.debt.max + ", stated by " + a.debt.stated + "/" + a.n);
+  if (a.payment.stated) line("payment", "median $" + a.payment.median + ", stated by " + a.payment.stated + "/" + a.n
+    + (a.payment.cadence.length ? " · cadence " + a.payment.cadence.map((x: any) => x.k + " " + x.n).join("/") : ""));
+  if (a.positions.stated) line("positions", "median " + a.positions.median + ", 2+ in " + a.positions.twoPlus + "/" + a.positions.stated + " stated");
+  if (a.years.stated) line("years_in_business", "median " + a.years.median + ", stated by " + a.years.stated + "/" + a.n);
+  line("language", "spanish " + a.language.spanish + "/" + a.n + " (" + a.language.share + "%)");
+  if (a.wantsToPay.stated) line("wants_to_pay", a.wantsToPay.yes + "/" + a.wantsToPay.stated + " stated");
+  if (a.triggers.length) line("triggers", a.triggers.map((x: any) => x.k + " " + x.n + "/" + a.n).join(" · "));
+  if (a.objections.length) line("objections", a.objections.map((x: any) => x.k + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
+  if (a.drivers.length) line("drivers", a.drivers.map((x: any) => x.k + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
+  if (a.lenders.length) line("lenders_named", a.lenders.map((x: any) => x.k + " " + x.n).join(" · "));
+  L.push("verbatims (owner's own words, pooled):");
+  for (const v of a.verbatims) L.push('  - "' + v + '"');
+  return L.join("\n");
+}
+
+// ---- BUILD (etapa B): una sola llamada al modelo, que solo escribe prosa ------
+async function personaWrite(akey: string, cfgRow: any, agg: any, srcLabel: string, thin: boolean) {
+  const secs = PERSONA_SECTIONS.map((s) => s.id).join(", ");
+  const sys = [
+    "You write the BUYER PERSONA panel of a sales-intelligence dashboard for a U.S. debt-restructuring firm.",
+    "Your input is an AGGREGATE table computed in code from " + agg.n + " closed-won deals, plus the buyers' own pooled verbatims. You did NOT see the raw calls.",
+    "BINDING RULE ON NUMBERS: every number you write must appear verbatim in the AGGREGATE block, together with its denominator. If a claim has no number in the block, state it qualitatively with NO number at all. Inventing, rounding or extrapolating a statistic is a failure.",
+    "AGGREGATE AND ANONYMOUS: describe the population, never an individual. Never write a person's or business's name. 'One owner in Dallas told us…' is banned; 'most owners describe…' is right.",
+    "Mirror the pooled verbatims exactly when you quote them — do not paraphrase or clean them up.",
+    thin
+      ? "SMALL SAMPLE — this persona rests on only " + agg.n + " deal(s). Do NOT write any percentage, ratio or 'X in Y' phrasing: with this N a percentage is a lie dressed as data. Write 'both deals', 'one of the two', 'the single call that mentioned it'. Prefer 3-5 short concrete lines over padded sections, and leave a section's `lines` EMPTY rather than inventing content. Set confidence to 'low' and use `caveats` to say plainly what cannot yet be known."
+      : "Write 3-5 lines per section. Each line opens with a short bold-able label followed by the claim. Use **double asterisks** for emphasis on the key figure or idea, and \"double quotes\" around the buyers' own words.",
+    "Sections are FIXED: " + secs + ". Fill exactly these, in this order, no others.",
+    "Each section also gets a `copy_signal`: one imperative sentence telling an SMS copywriter what to do with this section. Concrete, not generic.",
+    "Respond with ONLY valid JSON. No markdown fences, no prose outside the JSON.",
+  ].join("\n");
+
+  const schema = '{"headline":"3-6 word archetype label","confidence":"high|medium|low",'
+    + '"caveats":["what this sample cannot tell you yet"],'
+    + '"sections":[{"id":"' + PERSONA_SECTION_IDS[0] + '","lines":[{"label":"Short label","text":"The claim, plain text with **emphasis** and \\"quotes\\" allowed.","evidence_n":0}],"copy_signal":"one imperative sentence"}]}';
+
+  const user = "VERTICAL: " + cfgRow.label + "\nEVIDENCE SOURCE: " + srcLabel
+    + "\n\nAGGREGATE (the only numbers you may use):\n" + aggMd(agg)
+    + "\n\nReturn ONLY JSON in this exact shape (all " + PERSONA_SECTION_IDS.length + " sections):\n" + schema;
+
+  let r: Response;
+  try {
+    r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": akey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      // max_tokens acota thinking + salida juntos (misma lección que generate()).
+      body: JSON.stringify({ model: GEN_MODEL, max_tokens: 24000, system: sys, messages: [{ role: "user", content: user }] }),
+    });
+  } catch (e) { return { error: "Anthropic fetch: " + String(e) }; }
+  if (!r.ok) return { error: "Anthropic " + r.status + ": " + (await r.text()).slice(0, 300) };
+  const j = await r.json();
+  const text = (j.content || []).map((b: any) => b.text || "").join("").trim();
+  let parsed: any = null;
+  try { parsed = JSON.parse(text.replace(/^```(json)?\s*/i, "").replace(/\s*```$/i, "").trim()); } catch (_) { /* abajo */ }
+  if (!parsed) return { error: "el modelo no devolvió JSON válido (stop_reason=" + (j.stop_reason || "?") + ")", raw: text.slice(0, 600) };
+  return { parsed, usage: j.usage || null };
+}
+
+// Normaliza lo que devolvió el modelo a la forma que renderiza el dashboard.
+// Las secciones son fijas: si el modelo inventa una, se descarta; si omite otra,
+// aparece vacía. Así el layout nunca depende de lo que se le ocurra escribir.
+function normalizePersonaDoc(raw: any, cfgRow: any, agg: any, srcKey: string, srcLabel: string, pipelines: any[], thin: boolean) {
+  const byId: Record<string, any> = {};
+  for (const s of (Array.isArray(raw?.sections) ? raw.sections : [])) if (s && s.id) byId[String(s.id)] = s;
+  const sections = PERSONA_SECTIONS.map((meta) => {
+    const s = byId[meta.id] || {};
+    const lines = (Array.isArray(s.lines) ? s.lines : []).slice(0, 8).map((l: any) => ({
+      label: String(l?.label || "").slice(0, 60),
+      text: String(l?.text || "").slice(0, 900),
+      evidenceN: Number.isFinite(Number(l?.evidence_n)) && Number(l.evidence_n) > 0 ? Number(l.evidence_n) : null,
+    })).filter((l: any) => l.text);
+    return { id: meta.id, lines, copySignal: String(s.copy_signal || "").slice(0, 300) };
+  });
+  return {
+    version: 1,
+    personaKey: cfgRow.key,
+    label: cfgRow.label,
+    headline: String(raw?.headline || cfgRow.headline || "").slice(0, 80) || null,
+    confidence: ["high", "medium", "low"].includes(String(raw?.confidence)) ? raw.confidence : (thin ? "low" : "medium"),
+    caveats: (Array.isArray(raw?.caveats) ? raw.caveats : []).slice(0, 5).map((c: any) => String(c).slice(0, 240)),
+    thin,
+    source: { key: srcKey, label: srcLabel },
+    sample: {
+      deals: agg.n,
+      pipelines: pipelines.map((p) => p.name || p.id),
+      spanishShare: agg.language.share,
+      debtMedian: agg.debt.median,
+      paymentMedian: agg.payment.median,
+    },
+    sections,
+  };
+}
+
+// Markdown determinista, con la MISMA forma que el doc escrito a mano, porque
+// context() y generate() lo pegan crudo en prompts de Claude y ese formato es
+// estructural. Se genera en código: el modelo produce un solo artefacto y no
+// puede desincronizar la versión que ve el dashboard de la que ve la IA.
+function personaMd(doc: any, at: string): string {
+  let md = "# BUYER PERSONA — " + doc.label + (doc.headline ? ' · "' + doc.headline + '"' : "")
+    + " (from " + doc.sample.deals + " won deals)\n";
+  md += "meta:\n";
+  md += "  source: " + doc.sample.deals + " closed-won deals in " + (doc.sample.pipelines || []).join(" + ")
+    + " (" + doc.source.label + ")\n";
+  md += "  aggregate: true (anonymous, no client names)\n";
+  md += "  sample_size: " + doc.sample.deals + " deals\n";
+  md += "  confidence: " + doc.confidence + "\n";
+  md += "  generated: " + String(at).slice(0, 10) + "\n";
+  if (doc.caveats && doc.caveats.length) md += "  caveats: " + doc.caveats.join(" | ") + "\n";
+  md += "\n";
+  for (const meta of PERSONA_SECTIONS) {
+    const s = doc.sections.find((x: any) => x.id === meta.id);
+    if (!s || !s.lines.length) continue;
+    md += "## persona." + meta.id + " [item: " + meta.title.replace(/&amp;/g, "&").toLowerCase() + "]\ndata:\n";
+    for (const l of s.lines) md += "  - " + (l.label ? l.label + ": " : "") + l.text.replace(/\*\*/g, "") + "\n";
+    if (s.copySignal) md += "copy_signal: " + s.copySignal + "\n";
+    md += "\n";
+  }
+  return md;
+}
+
+async function personaBuild(cfg: Record<string, string>, key: string) {
+  const t0 = Date.now();
+  const akey = (cfg.anthropic_api_key || "").trim();
+  if (!akey) return { error: "Falta 'anthropic_api_key' en sms_analytics.config." };
+
+  const input = await withDb(async (c) => {
+    const cf = await c.queryObject<any>(
+      `select key,label,headline,min_sample from sms_analytics.persona_config where key=$1`, [key]);
+    const pp = await c.queryObject<any>(
+      `select pipeline_id as id, pipeline_name as name from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
+    const ex = await c.queryObject<any>(
+      `select o.extract from sms_analytics.persona_won_opp o
+         join sms_analytics.persona_pipeline p on p.pipeline_id=o.pipeline_id and p.persona_key=$1
+        where o.extract is not null`, [key]);
+    const src = await c.queryObject<any>(
+      `select t.source, count(*)::bigint as n from sms_analytics.call_transcript t
+         join sms_analytics.persona_pipeline p on p.pipeline_id=t.pipeline_id and p.persona_key=$1
+        where t.status='done' group by t.source order by 2 desc`, [key]);
+    const w = await c.queryObject<any>(
+      `select coalesce(sum(t.words),0)::bigint as w from sms_analytics.call_transcript t
+         join sms_analytics.persona_pipeline p on p.pipeline_id=t.pipeline_id and p.persona_key=$1
+        where t.status='done'`, [key]);
+    return { cfgRow: cf.rows[0], pipelines: pp.rows, extracts: ex.rows.map((r: any) => r.extract),
+             sources: src.rows, words: Number(w.rows[0]?.w || 0) };
+  });
+  if (!input.cfgRow) return { error: "persona '" + key + "' no existe" };
+
+  // Nunca se escribe un doc vacío: una regeneración fallida no puede borrar una
+  // persona que ya funcionaba.
+  if (!input.extracts.length) {
+    await setPhase(key, "error", "sin compradores leídos todavía");
+    return { error: "todavía no hay ningún comprador leído para '" + key + "' — corré scan, transcribe y extract primero" };
+  }
+
+  await setPhase(key, "generating");
+  const agg = personaAggregate(input.extracts);
+  const thin = agg.n < (input.cfgRow.min_sample || 15);
+  const topSrc = (input.sources[0]?.source) || "ghl";
+  const srcLabel = topSrc === "retell" ? "AI setter calls (Retell)" : "closer calls (GHL dialer)";
+
+  const w = await personaWrite(akey, input.cfgRow, agg, srcLabel, thin);
+  if ((w as any).error) { await setPhase(key, "error", (w as any).error); return w; }
+
+  const doc = normalizePersonaDoc((w as any).parsed, input.cfgRow, agg, topSrc, srcLabel, input.pipelines, thin);
+  // Con muestra chica un porcentaje es una mentira disfrazada de dato: se valida
+  // en código, no se confía en que el prompt haya alcanzado.
+  if (thin) {
+    const bad = doc.sections.flatMap((s: any) => s.lines).filter((l: any) => /%|\b\d+\s+in\s+\d+\b/i.test(l.text));
+    for (const l of bad) l.text = l.text.replace(/\s*\([^)]*%[^)]*\)/g, "").replace(/\b\d+(\.\d+)?%/g, "").replace(/\s{2,}/g, " ").trim();
+  }
+
+  const at = new Date().toISOString();
+  const md = personaMd(doc, at);
+  await withDb(async (c) => {
+    await c.queryArray(`update sms_analytics.persona_doc set is_current=false where persona_key=$1 and is_current`, [key]);
+    await c.queryArray(
+      `insert into sms_analytics.persona_doc(persona_key,n_calls,n_opps,n_words,pipelines,doc,md,model,is_current)
+       values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,true)`,
+      [key, agg.n, agg.n, input.words, JSON.stringify(input.pipelines), JSON.stringify(doc), md, GEN_MODEL]);
+    // Se espeja a context_docs para los consumidores de markdown. Para 'mca' se
+    // pisa también la clave vieja 'persona', que es la que leía todo hasta ahora.
+    await c.queryArray(
+      `insert into sms_analytics.context_docs(key,md,updated_at) values ($1,$2,now())
+       on conflict (key) do update set md=excluded.md, updated_at=now()`, ["persona_" + key, md]);
+    if (key === "mca") await c.queryArray(
+      `insert into sms_analytics.context_docs(key,md,updated_at) values ('persona',$1,now())
+       on conflict (key) do update set md=excluded.md, updated_at=now()`, [md]);
+  });
+  await setPhase(key, "done", agg.n + " compradores");
+  return { ok: true, key, deals: agg.n, thin, confidence: doc.confidence, source: srcLabel,
+    model: GEN_MODEL, usage: (w as any).usage, elapsedMs: Date.now() - t0, doc };
 }
 
 async function setPhase(key: string, phase: string, note?: string | null) {
@@ -1865,7 +2257,7 @@ Deno.serve(async (req) => {
     if (action === "refresh") return json(await refresh(cfg));
     if (action === "markwon") return json(await markwon(cfg));
     if (action === "context") {
-      const md = await context(url.searchParams.get("win") || "30");
+      const md = await context(url.searchParams.get("win") || "30", url.searchParams.get("persona") || "mca");
       return new Response(md, { status: 200, headers: { "content-type": "text/plain; charset=utf-8", "access-control-allow-origin": "*" } });
     }
     if (action === "generate") {
@@ -1891,6 +2283,12 @@ Deno.serve(async (req) => {
       return json(await personaTranscribe(cfg, url.searchParams.get("key"), budget,
         Math.max(Number(url.searchParams.get("limit") || 0), 0)));
     }
+    if (action === "persona_extract") {
+      const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
+      return json(await personaExtract(cfg, url.searchParams.get("key") || "mca", budget,
+        Math.max(Number(url.searchParams.get("limit") || 0), 0)));
+    }
+    if (action === "persona_build") return json(await personaBuild(cfg, url.searchParams.get("key") || "mca"));
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
