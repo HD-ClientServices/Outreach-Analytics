@@ -144,7 +144,7 @@ comprador, no el audio.
 
 | Vertical | Compradores ganados | Fuente | Estado |
 |---|--:|---|---|
-| MCA | 72 (71 con llamada) | closer, GHL → Deepgram | ⏳ encoladas; **falta `deepgram_api_key`**. Muestra el doc curado a mano (67 deals), etiquetado como tal. |
+| MCA | 72 (71 con llamada) | closer, GHL → Deepgram | ⏳ encoladas; **falta `deepgram_api_key`**. Muestra el doc curado a mano (67 deals), etiquetado como tal. `persona_build` se **niega** a reemplazarlo mientras haya tan poca evidencia leída. |
 | Credit Card | 2 | AI setter, Retell | ✅ generado, con aviso de muestra chica |
 
 ⚠️ Credit Card tiene **2 deals**. Es direccional, no estadístico, y el dashboard lo dice.
@@ -163,9 +163,10 @@ líneas. Por eso el layout no puede romperse por lo que se le ocurra escribir. E
 primero y recién después se le permiten dos cosas, `**negrita**` y `"comillas"` — el endpoint es
 abierto y el render nunca confía en lo que viene de la base.
 
-> **Cada request tarda ~6s**, y no es el trabajo: son las conexiones a Postgres. `getConfig()`,
-> `loadWorkflows()` y cada `withDb()` abren una conexión nueva (~1,9s cada una, contra el host
-> directo). Con una sola conexión compartida por request bajaría a ~2s. Pendiente.
+> **Cada request tarda ~4,4s**, y no es el trabajo: son las conexiones a Postgres. Cada
+> `withDb()` abre una conexión nueva contra el host directo (~1,9s). Config y workflows ya
+> comparten una sola conexión memoizada —eso sacó ~1,8s—, pero cada acción sigue abriendo la
+> suya. Falta un pool, o usar el pooler (puerto 6543) en vez del host directo.
 
 Marca monocromática con verde de acento: **no se asignan colores por secuencia** — son filas
 rotuladas, no series superpuestas.
