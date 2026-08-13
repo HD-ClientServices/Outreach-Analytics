@@ -1501,7 +1501,7 @@ async function personaData(key: string) {
 // llamada de 20 min son ~19 MB en RAM— y no el rate limit; y cada fila que sale
 // de 'queued' ya no vuelve nunca, que es lo que hace que esto no se pueda usar
 // para quemar la cuota de Deepgram.
-type TrOut = { status: string; err?: string; words?: number; lang?: string; bytes?: number; text?: string; durationS?: number };
+type TrOut = { status: string; err?: string; words?: number; lang?: string | null; bytes?: number; text?: string; durationS?: number };
 
 // Las llamadas de los AI setters ya vienen transcriptas de Retell: gratis,
 // instantáneo y más fiel que re-transcribir el audio. No pasan por Deepgram.
@@ -1562,8 +1562,22 @@ async function transcribeOne(cfg: Record<string, string>, row: any): Promise<TrO
   }
   const j = await r.json();
   const ch = j?.results?.channels?.[0];
-  const text = String(ch?.alternatives?.[0]?.transcript || "").trim();
-  const lang = ch?.detected_language || null;
+  const alt = ch?.alternatives?.[0];
+  const text = String(alt?.transcript || "").trim();
+  // Con language=multi el idioma NO viene en channel.detected_language (queda
+  // siempre null): Deepgram lo pone en alternatives[0].languages y, palabra por
+  // palabra, en words[].language. Se toma el dominante por cantidad de palabras,
+  // que es lo que importa cuando una llamada mezcla inglés y español.
+  let lang: string | null = ch?.detected_language || null;
+  if (!lang) {
+    const tally: Record<string, number> = {};
+    for (const w of (alt?.words || [])) {
+      const L = String(w?.language || "").slice(0, 5);
+      if (L) tally[L] = (tally[L] || 0) + 1;
+    }
+    const top = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+    lang = top ? top[0] : (Array.isArray(alt?.languages) ? alt.languages[0] || null : null);
+  }
   const words = text ? text.split(/\s+/).length : 0;
   if (words < MIN_TRANSCRIPT_WORDS)
     return { status: "short", err: words + " palabras", words, lang, bytes: audio.bytes.byteLength, text };
