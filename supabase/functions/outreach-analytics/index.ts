@@ -1296,7 +1296,12 @@ const PERSONA_SECTIONS: { id: string; no: string; title: string; help: string }[
 const PERSONA_SECTION_IDS = PERSONA_SECTIONS.map((s) => s.id);
 
 const DG_URL = "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=multi";
-const MAX_AUDIO_BYTES = 60 * 1024 * 1024; // ~60 min de PCM 8kHz; más que eso se descarta
+// Deepgram acepta hasta ~2 GB; el límite real acá es la memoria de la edge
+// function (~256 MB). Las llamadas de cierre de MCA promedian 30 min (~28 MB) y
+// llegan a 69 (~63 MB), así que 60 MB descartaba justo las más sustanciosas.
+const MAX_AUDIO_BYTES = 220 * 1024 * 1024;
+const BYTES_PER_SEC = 16000;   // PCM 8 kHz, 16 bit, mono
+const DUR_UNKNOWN_S = 4200;    // sin duración se asume el peor caso conocido
 const MIN_TRANSCRIPT_WORDS = 50;          // menos que esto = silencio / música de espera
 const DEFAULT_DAILY_MINUTES_CAP = 600;
 // Una fila reclamada que quedó en 'running' porque la edge function murió a los
@@ -1305,7 +1310,9 @@ const CLAIM_STALE_MIN = 10;
 const CLAIMABLE = `(t.status = 'queued' or (t.status = 'running' and t.claimed_at < now() - interval '${CLAIM_STALE_MIN} minutes'))`;
 // Margen para que una tanda entre entera en el presupuesto en vez de arrancar
 // a último momento, pagar Deepgram y morir antes de guardar la transcripción.
-const BATCH_RESERVE_MS = 45000;
+// Con audios de 30-69 min una tanda tarda ~90s, así que la reserva es grande:
+// en la práctica corre UNA tanda por invocación, que es lo predecible.
+const BATCH_RESERVE_MS = 75000;
 const HTTP_TIMEOUT_MS = 90000;
 
 function nInt(v: any): number { return Number(v || 0); }
@@ -1587,7 +1594,7 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
   // transcripción — plata gastada y nada que mostrar.
   while (Date.now() - t0 < budgetMs - BATCH_RESERVE_MS) {
     if (limit > 0 && claimed.size >= limit) break;
-    const take = limit > 0 ? Math.min(6, limit - claimed.size) : 6;
+    const take = limit > 0 ? Math.min(3, limit - claimed.size) : 3;
     const batch = await withDb(async (c) => {
       // El claim SACA la fila de la cola (status='running'). Antes solo subía
       // `attempts` y la dejaba en 'queued' durante la descarga + Deepgram;
@@ -1611,7 +1618,13 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
     if (!batch.length) break;
     for (const b of batch) claimed.add(String(b.id));
 
-    const out = await pool(batch, 3, async (row: any) => ({ row, res: await transcribeOne(cfg, row) }));
+    // La concurrencia sale del peso del lote: cada audio se sostiene entero en
+    // memoria mientras se manda a Deepgram, así que tres de 63 MB a la vez
+    // tumbarían la invocación. Los de Retell no pesan nada (son JSON).
+    const maxBytes = Math.max(...batch.map((r: any) =>
+      r.source === "retell" ? 0 : (r.duration_s ?? DUR_UNKNOWN_S) * BYTES_PER_SEC));
+    const conc = maxBytes > 40e6 ? 1 : maxBytes > 20e6 ? 2 : 3;
+    const out = await pool(batch, conc, async (row: any) => ({ row, res: await transcribeOne(cfg, row) }));
 
     await withDb(async (c) => {
       for (const o of out) {
