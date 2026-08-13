@@ -2144,7 +2144,7 @@ function personaMd(doc: any, at: string): string {
   return md;
 }
 
-async function personaBuild(cfg: Record<string, string>, key: string) {
+async function personaBuild(cfg: Record<string, string>, key: string, force = false) {
   const t0 = Date.now();
   const akey = (cfg.anthropic_api_key || "").trim();
   if (!akey) return { error: "Falta 'anthropic_api_key' en sms_analytics.config." };
@@ -2166,8 +2166,18 @@ async function personaBuild(cfg: Record<string, string>, key: string) {
       `select coalesce(sum(t.words),0)::bigint as w from sms_analytics.call_transcript t
          join sms_analytics.persona_pipeline p on p.pipeline_id=t.pipeline_id and p.persona_key=$1
         where t.status='done'`, [key]);
+    const cur = await c.queryObject<any>(
+      `select n_calls from sms_analytics.persona_doc where persona_key=$1 and is_current`, [key]);
+    // Cuántas llamadas quedan sin transcribir y por qué, para poder explicarlo.
+    const pend = await c.queryObject<any>(
+      `select count(*)::bigint as n from sms_analytics.call_transcript t
+         join sms_analytics.persona_pipeline p on p.pipeline_id=t.pipeline_id and p.persona_key=$1
+        where t.status in ('queued','running')`, [key]);
+    const nPend = Number(pend.rows[0]?.n || 0);
     return { cfgRow: cf.rows[0], pipelines: pp.rows, extracts: ex.rows.map((r: any) => r.extract),
-             sources: src.rows, words: Number(w.rows[0]?.w || 0) };
+             sources: src.rows, words: Number(w.rows[0]?.w || 0),
+             current: cur.rows[0] ? { n: Number(cur.rows[0].n_calls) } : null,
+             pendingWhy: nPend ? nPend + " llamadas sin transcribir" : null };
   });
   if (!input.cfgRow) return { error: "persona '" + key + "' no existe" };
 
@@ -2176,6 +2186,19 @@ async function personaBuild(cfg: Record<string, string>, key: string) {
   if (!input.extracts.length) {
     await setPhase(key, "error", "sin compradores leídos todavía");
     return { error: "todavía no hay ningún comprador leído para '" + key + "' — corré scan, transcribe y extract primero" };
+  }
+  // Y tampoco se pisa un documento bueno con uno hecho sobre muchísima menos
+  // evidencia. Pasa de verdad: sin deepgram_api_key, MCA tiene 1 sola llamada
+  // leída (la de Retell) contra las 67 del documento vigente — regenerar sin
+  // este freno cambiaría una persona de 67 compradores por una de 1.
+  if (input.current && input.current.n > 2 && input.extracts.length < input.current.n / 2 && !force) {
+    await setPhase(key, "error", "muestra insuficiente frente al doc vigente");
+    return { error: "El documento actual de '" + key + "' se apoya en " + input.current.n
+      + " compradores y ahora solo hay " + input.extracts.length
+      + " leídos, así que no se reemplaza. Falta transcribir el resto"
+      + (input.pendingWhy ? " (" + input.pendingWhy + ")" : "")
+      + ". Si igual querés generarlo con esta muestra, repetí con &force=1.",
+      have: input.extracts.length, current: input.current.n };
   }
 
   await setPhase(key, "generating");
@@ -2293,7 +2316,7 @@ Deno.serve(async (req) => {
       return json(await personaExtract(cfg, url.searchParams.get("key") || "mca", budget,
         Math.max(Number(url.searchParams.get("limit") || 0), 0)));
     }
-    if (action === "persona_build") return json(await personaBuild(cfg, url.searchParams.get("key") || "mca"));
+    if (action === "persona_build") return json(await personaBuild(cfg, url.searchParams.get("key") || "mca", url.searchParams.get("force") === "1"));
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
       const r = await work(cfg, budget);
