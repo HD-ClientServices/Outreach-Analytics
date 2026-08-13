@@ -336,7 +336,7 @@ var PSEC=[
   {id:"voice", no:"05", title:"Communication style",
    help:"Their words and the metrics they watch — to mirror in the SMS copy"}
 ];
-var PERSONAS=null, PIPES=null;
+var PERSONAS=null, PIPES=null, PBOOTING=false;
 
 // El texto del modelo se escapa PRIMERO y recién después se le permiten dos
 // cosas: **negrita** y "comillas". El endpoint es abierto, así que el render
@@ -347,13 +347,17 @@ function rich(s){
 }
 
 function pBoot(){
-  if(PERSONAS) return;
+  if(PERSONAS||PBOOTING) return;
+  PBOOTING=true;
   fetch(EP+"?action=personas").then(function(r){return r.json()}).then(function(d){
+    PBOOTING=false;
     PERSONAS = Array.isArray(d)?d:[];
     if(!ST.persona || !PERSONAS.some(function(p){return p.key==ST.persona}))
       ST.persona = PERSONAS.length?PERSONAS[0].key:"mca";
-    pTabs(); pLoad(); pFillGenSelect();
+    pTabs(); pFillGenSelect();
+    if(!document.getElementById("view-persona").hidden) pLoad();
   }).catch(function(e){
+    PBOOTING=false;
     document.getElementById("pBody").innerHTML='<div class="gen-err">Could not load the personas: '+esc(String(e))+'</div>';
   });
 }
@@ -364,7 +368,13 @@ function pTabs(){
   H+='<span class="pill" onclick="pNew()" title="Add another vertical">+ New</span>';
   document.getElementById("pTabs").innerHTML=H;
 }
-function pPick(k){ ST.persona=k; pTabs(); document.getElementById("pCfg").hidden=true; pLoad(); }
+function pPick(k){
+  if(PRUN) return;              // no cambiar de vertical con una corrida en curso
+  ST.persona=k;
+  if(PERSONAS) pTabs();         // durante el refresco de PERSONAS los pills siguen en pantalla
+  document.getElementById("pCfg").hidden=true;
+  pLoad();
+}
 function pFillGenSelect(){
   var sel=document.getElementById("g_persona"); if(!sel||!PERSONAS) return;
   var prev=sel.value;
@@ -373,12 +383,16 @@ function pFillGenSelect(){
 }
 function pCur(){ return (PERSONAS||[]).filter(function(p){return p.key==ST.persona})[0]||null; }
 
+var PSEQ=0; // dos pLoad() se solapan de rutina; solo pinta el ultimo pedido
 function pLoad(){
-  var body=document.getElementById("pBody");
+  var body=document.getElementById("pBody"), seq=++PSEQ, want=ST.persona;
   body.innerHTML='<div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div>';
-  fetch(EP+"?action=persona_data&key="+encodeURIComponent(ST.persona))
-    .then(function(r){return r.json()}).then(function(d){ pRender(d); })
-    .catch(function(e){ body.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
+  fetch(EP+"?action=persona_data&key="+encodeURIComponent(want))
+    .then(function(r){return r.json()}).then(function(d){
+      if(seq!==PSEQ || want!==ST.persona) return; // llego tarde: ya hay otra vertical en pantalla
+      pRender(d);
+    })
+    .catch(function(e){ if(seq===PSEQ) body.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
 }
 
 function pRender(d){
@@ -416,7 +430,7 @@ function pRender(d){
       + '<div class="bp-label"><span class="n">'+m.no+'</span> '+m.title+'</div>'
       + '<div class="bp-box">'
       + s.lines.map(function(l){
-          return '<div class="bp-line"'+(l.evidenceN?' title="'+l.evidenceN+' of '+n+' deals"':'')+'>'
+          return '<div class="bp-line">'
                + (l.label?'<b>'+rich(l.label)+':</b> ':'')+rich(l.text)+'</div>';
         }).join("")
       + '</div><div class="bp-help">'+m.help+'</div></div>';
@@ -477,7 +491,8 @@ function pNew(){
     body:JSON.stringify({key:k,label:label,pipelines:[],minSample:15,sort:900})})
     .then(function(r){return r.json()}).then(function(d){
       if(d.error){ alert(d.error); return; }
-      PERSONAS=null; ST.persona=k; pBoot(); setTimeout(pToggleCfg,400);
+      PERSONAS=null; ST.persona=k; pBoot();
+      setTimeout(function(){ document.getElementById("pCfg").hidden=true; pToggleCfg(); },400);
     });
 }
 
@@ -488,36 +503,59 @@ var PRUN=false;
 function pStep(t){ var el=document.getElementById("pRun"); el.hidden=false; el.innerHTML='<div class="note"><span class="spin"></span>'+t+'</div>'; }
 function pDone(t,bad){ var el=document.getElementById("pRun"); el.hidden=false;
   el.innerHTML='<div class="'+(bad?'gen-err':'note')+'">'+t+'</div>'; }
-function pCall(action,extra){
-  return fetch(EP+"?action="+action+"&key="+encodeURIComponent(ST.persona)+(extra||"")).then(function(r){return r.json()});
+// La vertical se FIJA al arrancar la corrida. Antes pCall leia ST.persona en cada
+// iteracion, asi que cambiar de pill a mitad de camino desviaba el resto del
+// pipeline a la otra persona.
+function pCall(action,key,extra){
+  return fetch(EP+"?action="+action+"&key="+encodeURIComponent(key)+(extra||"")).then(function(r){return r.json()});
 }
 function pRegenerate(){
   if(PRUN) return;
   var cur=pCur();
-  if(cur && !(cur.pipelines||[]).length){ alert("This persona has no pipelines yet — pick them under ⚙ Pipelines first."); return; }
+  if(cur && !(cur.pipelines||[]).length){ alert("This persona has no pipelines yet — pick them under \u2699 Pipelines first."); return; }
+  var key=ST.persona;                      // fijada para toda la corrida
   PRUN=true;
   var btn=document.getElementById("pGenBtn"); btn.classList.add("on"); btn.style.pointerEvents="none";
   var finish=function(msg,bad){ PRUN=false; btn.classList.remove("on"); btn.style.pointerEvents=""; pDone(msg,bad); };
 
+  // Nunca confiar en que `remaining` baja sola. Si se queda clavada (p.ej. hay
+  // llamadas que necesitan Deepgram y no hay key, o extracts que fallan siempre)
+  // se corta y se dice por que, en vez de reintentar cada 600ms para siempre.
   var drain=function(action,label,then){
-    pStep(label);
-    pCall(action,"&ms=100000").then(function(d){
-      if(d.error){ finish("<b>Error:</b> "+esc(d.error), true); return; }
-      if(d.remaining>0){ pStep(label+" · <b>"+d.remaining+"</b> left"); setTimeout(function(){drain(action,label,then)},600); }
-      else then(d);
-    }).catch(function(e){ finish("<b>Network error:</b> "+esc(String(e)), true); });
+    var last=null, stuck=0, iters=0;
+    var step=function(){
+      pStep(label+(last!=null&&last>0?" · <b>"+last+"</b> left":""));
+      pCall(action,key,"&ms=100000").then(function(d){
+        if(d.error){ finish("<b>Error:</b> "+esc(d.error), true); return; }
+        if(++iters>60){ finish("Stopped after 60 rounds on <b>"+esc(label)+"</b> — something is not advancing.", true); return; }
+        var rem=d.remaining||0;
+        if(rem<=0){ then(d); return; }
+        stuck = (last!=null && rem>=last) ? stuck+1 : 0;
+        last=rem;
+        if(stuck>=2){
+          var why=d.blockedWhy||d.deepgram||"no progress";
+          finish("Stopped: <b>"+rem+"</b> item"+(rem==1?"":"s")+" can't be processed \u2014 "+esc(why)
+                 +". Everything that could be done, was.", true);
+          return;
+        }
+        setTimeout(step,600);
+      }).catch(function(e){ finish("<b>Network error:</b> "+esc(String(e)), true); });
+    };
+    step();
   };
 
-  drain("persona_scan","Finding the won deals…",function(sc){
-    var note=sc.won!=null?(sc.won+" won deals · "+(sc.withCalls||0)+" with calls"+(sc.noCalls?" · "+sc.noCalls+" without any":"")):"";
-    drain("persona_transcribe","Reading the calls… "+note,function(){
-      drain("persona_extract","Understanding each buyer…",function(){
-        pStep("Writing the persona…");
-        pCall("persona_build").then(function(b){
+  drain("persona_scan","Finding the won deals\u2026",function(sc){
+    var note=sc.won!=null?(sc.won+" won deals \u00b7 "+(sc.withCalls||0)+" with calls"+(sc.noCalls?" \u00b7 "+sc.noCalls+" without any":"")):"";
+    drain("persona_transcribe","Reading the calls\u2026 "+note,function(tr){
+      drain("persona_extract","Understanding each buyer\u2026",function(){
+        pStep("Writing the persona\u2026");
+        pCall("persona_build",key).then(function(b){
           if(b.error){ finish("<b>Error:</b> "+esc(b.error), true); return; }
           PERSONAS=null;
-          finish("✓ Persona updated · <b>"+b.deals+"</b> won deal"+(b.deals==1?"":"s")+" · confidence "+esc(b.confidence)+" · "+esc(b.source));
-          pLoad(); pBoot();
+          var extra=(tr&&tr.blocked)?" \u00b7 <b>"+tr.blocked+"</b> call"+(tr.blocked==1?"":"s")+" not transcribed ("+esc(tr.blockedWhy||"")+")":"";
+          finish("\u2713 Persona updated \u00b7 <b>"+b.deals+"</b> won deal"+(b.deals==1?"":"s")+" \u00b7 confidence "+esc(b.confidence)+" \u00b7 "+esc(b.source)+extra);
+          if(ST.persona===key) pLoad();
+          pBoot();
         }).catch(function(e){ finish("<b>Network error:</b> "+esc(String(e)), true); });
       });
     });

@@ -12,46 +12,58 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Esto permite que cambios en los nombres de workflows en GHL se reflejen automáticamente.
 let WF: { key: string; label: string; re: RegExp; keywords: string[] }[] = [];
 
-async function loadWorkflows() {
-  try {
-    const rows = await withDb(async (c) => {
-      return await c.queryObject<{ key: string; label: string; keywords: string }>(
-        "select key,label,keywords from sms_analytics.workflows order by key"
-      );
-    });
-    WF = (rows.rows || []).map(r => ({
+// getConfig() y loadWorkflows() abrían UNA CONEXIÓN CADA UNO, en cada request,
+// antes de mirar siquiera qué acción se pidió. Contra el host directo cada
+// conexión cuesta ~1,9s, así que toda la app arrancaba con ~3,9s de peaje.
+// Ahora comparten una sola conexión y el resultado se memoiza mientras viva el
+// isolate, así que a partir del segundo request el peaje es 0.
+let BOOT: { cfg: Record<string, string>; at: number } | null = null;
+const BOOT_TTL_MS = 60000;
+
+async function boot(): Promise<Record<string, string>> {
+  if (BOOT && Date.now() - BOOT.at < BOOT_TTL_MS && WF.length) return BOOT.cfg;
+  const out = await withDb(async (c) => {
+    const cf = await c.queryObject<{ key: string; value: string }>(
+      "select key,value from sms_analytics.config");
+    const cfg: Record<string, string> = {};
+    for (const row of cf.rows) cfg[row.key] = row.value;
+    let wfRows: any[] = [];
+    try {
+      const w = await c.queryObject<{ key: string; label: string; keywords: string }>(
+        "select key,label,keywords from sms_analytics.workflows order by key");
+      wfRows = w.rows || [];
+    } catch (_) { /* se cae al fallback de abajo */ }
+    return { cfg, wfRows };
+  });
+  applyWorkflows(out.wfRows);
+  BOOT = { cfg: out.cfg, at: Date.now() };
+  return out.cfg;
+}
+
+function applyWorkflows(rows: any[]) {
+  if (rows && rows.length) {
+    WF = rows.map((r: any) => ({
       key: r.key,
       label: r.label,
       re: new RegExp(r.label, "i"),
-      keywords: (r.keywords || "").split(",").filter(k => k.trim())
+      keywords: (r.keywords || "").split(",").filter((k: string) => k.trim()),
     }));
-    if (!WF.length) throw new Error("No workflows configured");
-  } catch (e) {
-    // Fallback a defaults si falla la carga desde DB
-    WF = [
-      {
-        key: "cc",
-        label: "Partner CC · DebtMD v2",
-        re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
-        keywords: ["cc", "credit", "submission", "anna", "debtmd"]
-      },
-      {
-        key: "cold",
-        label: "V2 · BULK FUP COLD BLAST",
-        re: /improve.*payment|mca.*payment|quick call|open to.*call/i,
-        keywords: ["improve", "weekly", "payment", "mca", "call"]
-      },
-      {
-        key: "defdec",
-        label: "PARTNER · Defaults & Declined",
-        re: /default|declined|qualify.*mca|just got.*file|file received/i,
-        keywords: ["default", "declined", "qualify", "file", "defdec"]
-      },
-    ];
+    return;
   }
+  WF = WF_FALLBACK;
 }
 
-
+const WF_FALLBACK: typeof WF = [
+  { key: "cc", label: "Partner CC · DebtMD v2",
+    re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
+    keywords: ["cc", "credit", "submission", "anna", "debtmd"] },
+  { key: "cold", label: "V2 · BULK FUP COLD BLAST",
+    re: /improve.*payment|mca.*payment|quick call|open to.*call/i,
+    keywords: ["improve", "weekly", "payment", "mca", "call"] },
+  { key: "defdec", label: "PARTNER · Defaults & Declined",
+    re: /default|declined|qualify.*mca|just got.*file|file received/i,
+    keywords: ["default", "declined", "qualify", "file", "defdec"] },
+];
 
 async function getSequenceAndBranchFromGHLTags(contactId: string, key: string): Promise<{sequence: string, branch: string}> {
   try {
@@ -209,12 +221,6 @@ function dbClient() { return new Client(Deno.env.get("SUPABASE_DB_URL")!); }
 async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const c = dbClient(); await c.connect();
   try { return await fn(c); } finally { await c.end(); }
-}
-async function getConfig(): Promise<Record<string, string>> {
-  return await withDb(async (c) => {
-    const r = await c.queryObject<{ key: string; value: string }>("select key,value from sms_analytics.config");
-    const m: Record<string, string> = {}; for (const row of r.rows) m[row.key] = row.value; return m;
-  });
 }
 async function gget(url: string, key: string, tries = 5): Promise<any> {
   for (let i = 0; i < tries; i++) {
@@ -1293,6 +1299,14 @@ const DG_URL = "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=tru
 const MAX_AUDIO_BYTES = 60 * 1024 * 1024; // ~60 min de PCM 8kHz; más que eso se descarta
 const MIN_TRANSCRIPT_WORDS = 50;          // menos que esto = silencio / música de espera
 const DEFAULT_DAILY_MINUTES_CAP = 600;
+// Una fila reclamada que quedó en 'running' porque la edge function murió a los
+// 150s vuelve a estar disponible pasado este rato.
+const CLAIM_STALE_MIN = 10;
+const CLAIMABLE = `(t.status = 'queued' or (t.status = 'running' and t.claimed_at < now() - interval '${CLAIM_STALE_MIN} minutes'))`;
+// Margen para que una tanda entre entera en el presupuesto en vez de arrancar
+// a último momento, pagar Deepgram y morir antes de guardar la transcripción.
+const BATCH_RESERVE_MS = 45000;
+const HTTP_TIMEOUT_MS = 90000;
 
 function nInt(v: any): number { return Number(v || 0); }
 function keyOk(k: string): boolean { return /^[a-z0-9_-]{2,24}$/.test(k); }
@@ -1302,15 +1316,27 @@ function keyOk(k: string): boolean { return /^[a-z0-9_-]{2,24}$/.test(k); }
 async function gbin(url: string, key: string, tries = 4): Promise<{ ok: boolean; status: number; bytes: ArrayBuffer | null }> {
   let status = 0;
   for (let i = 0; i < tries; i++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
     try {
-      const r = await fetch(url, { headers: { Authorization: "Bearer " + key, Version: VER } });
+      const r = await fetch(url, { headers: { Authorization: "Bearer " + key, Version: VER }, signal: ctrl.signal });
       status = r.status;
-      if (r.status === 200) return { ok: true, status, bytes: await r.arrayBuffer() };
+      if (r.status === 200) { const b = await r.arrayBuffer(); clearTimeout(timer); return { ok: true, status, bytes: b }; }
+      clearTimeout(timer);
       if ([429, 403, 502, 503].includes(r.status)) { await sleep(1500 + i * 1500); continue; }
       return { ok: false, status, bytes: null };
-    } catch (_) { await sleep(1000 + i * 1000); }
+    } catch (_) { clearTimeout(timer); await sleep(1000 + i * 1000); }
   }
   return { ok: false, status, bytes: null };
+}
+
+// fetch con timeout duro. Sin esto, una descarga o un POST colgado se come el
+// presupuesto entero de la invocación (aiFindings ya usaba este patrón).
+async function fetchT(url: string, init: RequestInit, ms = HTTP_TIMEOUT_MS): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { ...init, signal: ctrl.signal }); }
+  finally { clearTimeout(timer); }
 }
 
 // ---- Lectura: configs + pipelines + estado de la cola -----------------------
@@ -1421,19 +1447,26 @@ async function personaStatus(key: string) {
          count(*) filter (where t.status='no_audio')::bigint as no_audio,
          count(*) filter (where t.status='failed')::bigint   as failed,
          count(*) filter (where t.status='short')::bigint    as short,
-         count(*) filter (where t.status='done' and t.extract is not null)::bigint as extracted,
+         count(*) filter (where t.status='running')::bigint  as running,
          count(*) filter (where t.lang like 'es%')::bigint   as es
        from sms_analytics.call_transcript t
        join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id
       where p.persona_key = $1`, [key]);
+    // El extract vive en la oportunidad desde que la unidad pasó a ser el
+    // comprador; contarlo sobre call_transcript daba 0 siempre.
+    const ex = await c.queryObject<any>(
+      `select count(*) filter (where o.extract is not null)::bigint as extracted
+         from sms_analytics.persona_won_opp o
+         join sms_analytics.persona_pipeline p on p.pipeline_id = o.pipeline_id
+        where p.persona_key = $1`, [key]);
     const d = await c.queryObject<any>(
       `select n_calls, created_at from sms_analytics.persona_doc where persona_key=$1 and is_current`, [key]);
     const a = r.rows[0] || {}; const b = t.rows[0] || {};
     return {
       key, phase: a.phase || "idle", note: a.note || null,
       opps: nInt(a.opps), expanded: nInt(a.expanded), noCalls: nInt(a.no_calls),
-      queued: nInt(b.queued), done: nInt(b.done), noAudio: nInt(b.no_audio),
-      failed: nInt(b.failed), short: nInt(b.short), extracted: nInt(b.extracted), spanish: nInt(b.es),
+      queued: nInt(b.queued), running: nInt(b.running), done: nInt(b.done), noAudio: nInt(b.no_audio),
+      failed: nInt(b.failed), short: nInt(b.short), extracted: nInt(ex.rows[0]?.extracted), spanish: nInt(b.es),
       doc: d.rows[0] ? { nCalls: d.rows[0].n_calls, at: d.rows[0].created_at } : null,
     };
   });
@@ -1470,9 +1503,9 @@ async function transcribeRetell(cfg: Record<string, string>, row: any): Promise<
   if (!rkey) return { status: "failed", err: "falta retell_api_key en sms_analytics.config" };
   let r: Response;
   try {
-    r = await fetch("https://api.retellai.com/v2/get-call/" + row.ext_id, {
+    r = await fetchT("https://api.retellai.com/v2/get-call/" + row.ext_id, {
       headers: { Authorization: "Bearer " + rkey },
-    });
+    }, 30000);
   } catch (e) { return { status: "retry", err: "retell fetch: " + String(e) }; }
   if (r.status === 404) return { status: "no_audio", err: "retell 404 (llamada fuera de retención)" };
   if (!r.ok) {
@@ -1507,7 +1540,7 @@ async function transcribeOne(cfg: Record<string, string>, row: any): Promise<TrO
 
   let r: Response;
   try {
-    r = await fetch(DG_URL, {
+    r = await fetchT(DG_URL, {
       method: "POST",
       headers: { Authorization: "Token " + dkey, "Content-Type": "audio/wav" },
       body: audio.bytes,
@@ -1549,16 +1582,26 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
   let done = 0, failed = 0, noAudio = 0, short = 0, minutes = 0;
   const claimed = new Set<string>();
 
-  while (Date.now() - t0 < budgetMs) {
+  // Reserva: una tanda arranca solo si le queda tiempo para TERMINAR. Sin esto
+  // podía empezar a 1ms del límite, pagar Deepgram y morir antes de guardar la
+  // transcripción — plata gastada y nada que mostrar.
+  while (Date.now() - t0 < budgetMs - BATCH_RESERVE_MS) {
     if (limit > 0 && claimed.size >= limit) break;
     const take = limit > 0 ? Math.min(6, limit - claimed.size) : 6;
     const batch = await withDb(async (c) => {
+      // El claim SACA la fila de la cola (status='running'). Antes solo subía
+      // `attempts` y la dejaba en 'queued' durante la descarga + Deepgram;
+      // como withDb no abre transacción, el `for update skip locked` se suelta
+      // enseguida y otra invocación reclamaba la MISMA fila y la volvía a pagar.
+      // `claimed_at` deja recuperar las que quedaron a medias cuando la función
+      // se muere a los 150s.
       const r = await c.queryObject<any>(
-        `update sms_analytics.call_transcript set attempts = attempts + 1
+        `update sms_analytics.call_transcript
+            set attempts = attempts + 1, status = 'running', claimed_at = now()
           where id in (
             select t.id from sms_analytics.call_transcript t
             ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $2" : ""}
-            where t.status = 'queued' and t.attempts < 3
+            where ${CLAIMABLE} and t.attempts < 3
               ${dgOpen ? "" : "and t.source <> 'ghl'"}
             order by t.attempts, t.id limit $1 for update skip locked)
           returning id, message_id, rec_index, duration_s, attempts, source, ext_id`,
@@ -1598,19 +1641,32 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
     });
   }
 
-  const remaining = await withDb(async (c) => {
-    const r = await c.queryObject<{ n: bigint }>(
-      `select count(*)::bigint as n from sms_analytics.call_transcript t
-       ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $1" : ""}
-       where t.status = 'queued' and t.attempts < 3`, key ? [key] : []);
-    return Number(r.rows[0].n);
+  // `remaining` tiene que contar EXACTAMENTE lo que el claim puede reclamar. Si
+  // no, el drenado del dashboard no termina nunca: sin deepgram_api_key el claim
+  // excluye las filas 'ghl' pero el conteo las seguía sumando, así que devolvía
+  // el mismo número para siempre y la UI reintentaba cada 600ms sin avanzar.
+  // Lo que queda fuera se informa aparte, en `blocked`, para poder decirlo.
+  const counts = await withDb(async (c) => {
+    const r = await c.queryObject<{ n: bigint; b: bigint }>(
+      `select
+         count(*) filter (where ${CLAIMABLE} and t.attempts < 3 ${dgOpen ? "" : "and t.source <> 'ghl'"})::bigint as n,
+         count(*) filter (where ${CLAIMABLE} and t.attempts < 3 ${dgOpen ? "and false" : "and t.source = 'ghl'"})::bigint as b
+       from sms_analytics.call_transcript t
+       ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $1" : ""}`,
+      key ? [key] : []);
+    return { remaining: Number(r.rows[0].n), blocked: Number(r.rows[0].b) };
   });
+  const remaining = counts.remaining;
+  const why = dgOpen ? null
+    : (hasDg ? "tope diario alcanzado (" + Math.round(usedMin) + "/" + cap + " min)"
+             : "falta deepgram_api_key en sms_analytics.config");
   if (key) await setPhase(key, remaining ? "transcribing" : "extracting",
-    remaining ? remaining + " llamadas en cola" : null);
+    remaining ? remaining + " llamadas en cola" : (counts.blocked ? counts.blocked + " llamadas sin transcribir: " + why : null));
 
   return { key, done, failed, noAudio, short, remaining,
+    blocked: counts.blocked, blockedWhy: counts.blocked ? why : null,
     minutes: Math.round(minutes * 10) / 10, dailyMinutesUsed: Math.round(usedMin),
-    deepgram: dgOpen ? "on" : (hasDg ? "tope diario alcanzado (" + Math.round(usedMin) + "/" + cap + " min)" : "sin deepgram_api_key — solo se procesan llamadas de Retell"),
+    deepgram: dgOpen ? "on" : why,
     elapsedMs: Date.now() - t0 };
 }
 
@@ -1851,16 +1907,31 @@ async function personaExtract(cfg: Record<string, string>, key: string, budgetMs
 
   while (Date.now() - t0 < budgetMs) {
     if (limit > 0 && done + empty + failed >= limit) break;
+    // El intento se cobra AL RECLAMAR, no al terminar. Antes, si extractOne
+    // devolvía null no se persistía nada: la misma fila volvía a salir en el
+    // `limit 4` siguiente y el drenado del dashboard la reintentaba cada 600ms,
+    // pagando Anthropic cada vez, sin fin.
     const batch = await withDb(async (c) => {
       const r = await c.queryObject<any>(
-        `select o.opportunity_id,
+        `with claimed as (
+           update sms_analytics.persona_won_opp o
+              set extract_attempts = o.extract_attempts + 1
+            where o.opportunity_id in (
+              select o2.opportunity_id
+                from sms_analytics.persona_won_opp o2
+                join sms_analytics.persona_pipeline p on p.pipeline_id = o2.pipeline_id and p.persona_key = $1
+                join sms_analytics.call_transcript t on t.opportunity_id = o2.opportunity_id
+               where o2.extract is null and o2.extract_attempts < 3
+                 and t.status = 'done' and t.transcript is not null
+               group by o2.opportunity_id
+               limit 4)
+            returning o.opportunity_id)
+         select c.opportunity_id,
                 string_agg(t.transcript, E'\n\n---\n\n' order by t.call_at) as text
-           from sms_analytics.persona_won_opp o
-           join sms_analytics.persona_pipeline p on p.pipeline_id = o.pipeline_id and p.persona_key = $1
-           join sms_analytics.call_transcript t on t.opportunity_id = o.opportunity_id
-          where o.extract is null and t.status = 'done' and t.transcript is not null
-          group by o.opportunity_id
-          limit 4`, [key]);
+           from claimed c
+           join sms_analytics.call_transcript t on t.opportunity_id = c.opportunity_id
+          where t.status = 'done' and t.transcript is not null
+          group by c.opportunity_id`, [key]);
       return r.rows;
     });
     if (!batch.length) break;
@@ -1868,8 +1939,7 @@ async function personaExtract(cfg: Record<string, string>, key: string, budgetMs
     const out = await pool(batch, 4, async (b: any) => ({ b, ex: await extractOne(akey, b.text) }));
     await withDb(async (c) => {
       for (const o of out) {
-        if (!o) { failed++; continue; }
-        if (!o.ex) { failed++; continue; }
+        if (!o || !o.ex) { failed++; continue; }
         await c.queryArray(
           `update sms_analytics.persona_won_opp set extract=$2::jsonb, extract_at=now() where opportunity_id=$1`,
           [o.b.opportunity_id, JSON.stringify(o.ex)]);
@@ -1879,13 +1949,15 @@ async function personaExtract(cfg: Record<string, string>, key: string, budgetMs
     if (failed >= 8) break; // algo está roto de verdad; no seguir quemando API
   }
 
+  // Mismo criterio que el claim, con el tope de intentos incluido: si no, los
+  // que fallan siempre dejarían `remaining` clavado y el drenado no terminaría.
   const remaining = await withDb(async (c) => {
     const r = await c.queryObject<{ n: bigint }>(
       `select count(distinct o.opportunity_id)::bigint as n
          from sms_analytics.persona_won_opp o
          join sms_analytics.persona_pipeline p on p.pipeline_id = o.pipeline_id and p.persona_key = $1
          join sms_analytics.call_transcript t on t.opportunity_id = o.opportunity_id
-        where o.extract is null and t.status = 'done'`, [key]);
+        where o.extract is null and o.extract_attempts < 3 and t.status = 'done'`, [key]);
     return Number(r.rows[0].n);
   });
   await setPhase(key, remaining ? "extracting" : "generating",
@@ -1987,7 +2059,7 @@ async function personaWrite(akey: string, cfgRow: any, agg: any, srcLabel: strin
 
   const schema = '{"headline":"3-6 word archetype label","confidence":"high|medium|low",'
     + '"caveats":["what this sample cannot tell you yet"],'
-    + '"sections":[{"id":"' + PERSONA_SECTION_IDS[0] + '","lines":[{"label":"Short label","text":"The claim, plain text with **emphasis** and \\"quotes\\" allowed.","evidence_n":0}],"copy_signal":"one imperative sentence"}]}';
+    + '"sections":[{"id":"' + PERSONA_SECTION_IDS[0] + '","lines":[{"label":"Short label","text":"The claim, plain text with **emphasis** and \\"quotes\\" allowed."}],"copy_signal":"one imperative sentence"}]}';
 
   const user = "VERTICAL: " + cfgRow.label + "\nEVIDENCE SOURCE: " + srcLabel
     + "\n\nAGGREGATE (the only numbers you may use):\n" + aggMd(agg)
@@ -2022,7 +2094,6 @@ function normalizePersonaDoc(raw: any, cfgRow: any, agg: any, srcKey: string, sr
     const lines = (Array.isArray(s.lines) ? s.lines : []).slice(0, 8).map((l: any) => ({
       label: String(l?.label || "").slice(0, 60),
       text: String(l?.text || "").slice(0, 900),
-      evidenceN: Number.isFinite(Number(l?.evidence_n)) && Number(l.evidence_n) > 0 ? Number(l.evidence_n) : null,
     })).filter((l: any) => l.text);
     return { id: meta.id, lines, copySignal: String(s.copy_signal || "").slice(0, 300) };
   });
@@ -2120,8 +2191,21 @@ async function personaBuild(cfg: Record<string, string>, key: string) {
   // Con muestra chica un porcentaje es una mentira disfrazada de dato: se valida
   // en código, no se confía en que el prompt haya alcanzado.
   if (thin) {
-    const bad = doc.sections.flatMap((s: any) => s.lines).filter((l: any) => /%|\b\d+\s+in\s+\d+\b/i.test(l.text));
-    for (const l of bad) l.text = l.text.replace(/\s*\([^)]*%[^)]*\)/g, "").replace(/\b\d+(\.\d+)?%/g, "").replace(/\s{2,}/g, " ").trim();
+    // Sacar el porcentaje NO alcanza: "2 in 3 owners" es exactamente el fraseo
+    // que el prompt prohíbe con muestra chica, y sobrevivía intacto porque las
+    // sustituciones solo atacaban el símbolo %. Si después de limpiar la línea
+    // todavía afirma una proporción, se descarta entera — mejor una sección más
+    // corta que una estadística inventada sobre 2 casos.
+    for (const s of doc.sections) {
+      s.lines = s.lines.map((l: any) => {
+        if (!/%|\b\d+\s+in\s+\d+\b/i.test(l.text)) return l;
+        const t = l.text
+          .replace(/\s*\([^)]*%[^)]*\)/g, "")
+          .replace(/\b\d+(\.\d+)?\s*%/g, "")
+          .replace(/\s{2,}/g, " ").replace(/\s+([.,;])/g, "$1").trim();
+        return /%|\b\d+\s+in\s+\d+\b/i.test(t) ? null : { ...l, text: t };
+      }).filter(Boolean);
+    }
   }
 
   const at = new Date().toISOString();
@@ -2163,11 +2247,10 @@ Deno.serve(async (req) => {
   const token = url.searchParams.get("token");
   if (req.method === "OPTIONS") return new Response("ok", { headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*" } });
 
+  // Config + workflows en UNA sola conexión, memoizados mientras viva el isolate.
   let cfg: Record<string, string>;
-  try { cfg = await getConfig(); } catch (e) { return json({ error: "db/config: " + String(e) }, 500); }
-
-  // Cargar workflows dinámicos desde Supabase (en lugar de hardcodeados)
-  try { await loadWorkflows(); } catch (e) { console.warn("workflows load failed, using defaults:", e); }
+  try { cfg = await boot(); } catch (e) { return json({ error: "db/config: " + String(e) }, 500); }
+  if (!WF.length) WF = WF_FALLBACK;
 
   // App ABIERTA: no hay clave de operador. Cualquiera con el link puede ejecutar TODAS las
   // acciones (incluidas las que mutan la base o gastan API de GHL/Anthropic). El link es la

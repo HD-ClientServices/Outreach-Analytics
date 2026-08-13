@@ -6,6 +6,9 @@ Rendimiento de las secuencias SMS outbound de GoHighLevel, con la métrica que i
 CR de secuencia = live transfers ÷ contactos ingresados
 ```
 
+…y, desde el tab **Buyer Persona**, quién compra: dos verticales (MCA y Credit Card) escritas
+desde las transcripciones de las llamadas que terminaron en WON.
+
 Estado: **backfill completo, clasificación incompleta.** Ver [Pendientes](#pendientes).
 
 ---
@@ -35,12 +38,16 @@ muere a los ~150s. Por eso el pipeline es **por lotes**, empujado por cron.
 
 | Tabla | Qué guarda |
 |---|---|
-| `config` | `ghl_api_key` (read-only), `ghl_location`, `dash_token`. **Los secretos viven acá, no en el código.** |
+| `config` | `ghl_api_key` (read-only), `ghl_location`, `dash_token`, `anthropic_api_key`, `retell_api_key`, `deepgram_api_key`. **Los secretos viven acá, no en el código.** |
 | `cohort` | Un registro por contacto (9.508). `entered_at` = fecha del 1er SMS = ingreso real a la secuencia. Es el **denominador**. |
 | `msg_events` | Un registro por SMS enviado (220.649), con fecha, posición en la cadencia, si tuvo respuesta y si derivó en LT. |
 | `templates` | Diccionario `tmpl_key → texto`, para no repetir el texto en cada evento. |
 | `snapshots_v2` | Salida del `build`: las 3 ventanas precalculadas. |
 | `run` | Estado del backfill. |
+| `persona_config` · `persona_pipeline` | Una fila por vertical (`mca`, `cc`, …) y sus pipelines de Closing. **La selección de pipelines de la interfaz vive acá**, no en el código. |
+| `persona_won_opp` | Una fila por oportunidad ganada, con `extract` = la ficha del comprador. |
+| `call_transcript` | Cola **y** almacén de transcripciones. `unique(message_id, rec_index)`. |
+| `persona_doc` · `persona_run` | El documento generado (JSON + markdown) y la fase de la corrida. |
 
 > **Las ventanas 7/14/30 salen de UNA sola extracción de 30 días**, filtrando `sent_at`/`entered_at`.
 > Nunca correr tres extracciones.
@@ -60,6 +67,13 @@ Dos niveles de acceso (ver [Seguridad](#seguridad)):
 | `?action=generate` / `insight_ai` | operador | Llaman a la API de Anthropic (**gastan plata**). |
 | `?action=status` | lectura | Progreso del backfill. |
 | `?action=data` | lectura | Último snapshot. Lo consume el dashboard. |
+| `?action=personas` / `persona_data` / `persona_status` | lectura | Verticales configuradas, el documento vigente y el estado de una corrida. |
+| `?action=ghl_pipelines` | lectura | Los pipelines de GHL, para la UI de selección. |
+| `?action=persona_save` | operador | Guarda una vertical y sus pipelines. Crear una nueva = POST con `key` nuevo. |
+| `?action=persona_scan&key=` | operador | Barre los WON de esos pipelines y encola sus llamadas. `&dry=1` no escribe. **Gratis.** |
+| `?action=persona_transcribe&key=` | operador | Drena la cola. Retell es gratis; GHL pasa por **Deepgram (gasta)**. |
+| `?action=persona_extract&key=` | operador | Una ficha por comprador. **Gasta Anthropic** (poco, y queda cacheada). |
+| `?action=persona_build&key=` | operador | Agrega en código + una llamada a Claude → nuevo documento. |
 
 ### Correr un backfill de cero
 
@@ -80,11 +94,78 @@ select cron.alter_job(job_id := <id>, active := false);
 
 ---
 
+## Buyer Persona
+
+Dos verticales — **MCA** y **Credit Card** — generadas desde las transcripciones de las llamadas
+de las oportunidades en estado WON de los pipelines de Closing que se eligen **desde la interfaz**.
+
+```
+persona_scan  →  persona_transcribe  →  persona_extract  →  persona_build
+ (GHL, $0)        (Retell $0 / Deepgram $)   (Anthropic, cacheado)   (1 llamada)
+```
+
+### Qué cuenta como "ganado"
+
+`status === 'won'`, no el stage. Es el hecho de negocio, no la posición de una tarjeta: un won
+parado en "Contract Sent" sigue siendo un comprador y su llamada sigue siendo evidencia. Eso
+explica el 70 vs 61 de RISE. Además no exige que exista un stage llamado "Won", así que un buyer
+futuro cuyo stage se llame "Funded" entra sin tocar código. Igual el barrido es `status=all` y
+clasifica en código, así que **las dos señales quedan guardadas** en `won_src`: ampliar después
+no requiere re-scanear.
+
+### Dos fuentes de transcripción, elegidas por llamada
+
+GHL guarda el **audio**, no el texto. Pero no todas las llamadas son iguales:
+
+| Tipo en GHL | Quién llama | De dónde sale el texto | Costo | Cuántas se encolan |
+|---|---|---|---|---|
+| `TYPE_CALL` | closer humano (dialer de GHL) | descarga del audio → **Deepgram** (`nova-3`, `language=multi`) | ~US$0,004/min | **solo la más larga** por contacto |
+| `TYPE_CUSTOM_CALL` | AI setter (Anna/Sara/Kate) | **Retell**, que ya guarda la transcripción | $0 | **todas** |
+
+`language=multi` es innegociable: ~1 de cada 6 llamadas es en español y con `language=en`
+Deepgram devuelve basura con alta confianza, que envenenaría la persona en silencio.
+
+`call_transcript` guarda `pipeline_id`, **no** `persona_key` — la vertical sale de un join contra
+`persona_pipeline`. Mover un pipeline entre verticales, o sumar uno nuevo desde la interfaz,
+re-agrupa lo ya transcripto **sin volver a pagar**.
+
+### Los números los calcula el código, no el modelo
+
+`personaAggregate()` produce las medianas y los conteos con su denominador en TypeScript. El
+modelo recibe esa tabla y **solo escribe la prosa**, atado a la regla de que todo número que
+escriba tiene que aparecer textual en el bloque AGGREGATE. Con muestra chica (por debajo de
+`min_sample`) se le prohíben los porcentajes —con N=2 un porcentaje es una mentira disfrazada de
+dato— y además se limpian en código por si el prompt no alcanzó.
+
+El extract vive en la **oportunidad**, no en la llamada: la unidad de una buyer persona es el
+comprador, no el audio.
+
+### Estado actual
+
+| Vertical | Compradores ganados | Fuente | Estado |
+|---|--:|---|---|
+| MCA | 72 (71 con llamada) | closer, GHL → Deepgram | ⏳ encoladas; **falta `deepgram_api_key`**. Muestra el doc curado a mano (67 deals), etiquetado como tal. |
+| Credit Card | 2 | AI setter, Retell | ✅ generado, con aviso de muestra chica |
+
+⚠️ Credit Card tiene **2 deals**. Es direccional, no estadístico, y el dashboard lo dice.
+
+---
+
 ## Dashboard
 
 `dashboard/index.html` — autocontenido, lee `?action=data` en vivo. Sigue el design system
 de Intro (tokens tomados de tryintro.com): Inter 300 con tracking `-0.03em`, superficie
 `#fdfcfc`, accent negro, highlight `#fef8d4`, verde `#16a34a`, JetBrains Mono para números.
+
+Las tarjetas de Buyer Persona se arman desde `?action=persona_data`, pero **el número, el título
+y la ayuda de cada sección son copy del código**, no salida del modelo: la IA solo llena las
+líneas. Por eso el layout no puede romperse por lo que se le ocurra escribir. El texto se escapa
+primero y recién después se le permiten dos cosas, `**negrita**` y `"comillas"` — el endpoint es
+abierto y el render nunca confía en lo que viene de la base.
+
+> **Cada request tarda ~6s**, y no es el trabajo: son las conexiones a Postgres. `getConfig()`,
+> `loadWorkflows()` y cada `withDb()` abren una conexión nueva (~1,9s cada una, contra el host
+> directo). Con una sola conexión compartida por request bajaría a ~2s. Pendiente.
 
 Marca monocromática con verde de acento: **no se asignan colores por secuencia** — son filas
 rotuladas, no series superpuestas.
@@ -188,4 +269,17 @@ Modelo de acceso (rediseñado 21/07/2026 — el token salió de la URL del dashb
   Nunca en el código ni en el repo. Ningún endpoint las devuelve al cliente.
 - Si el link se filtra: rotar `cfg.dash_token` (corta a los operadores) y/o mover el sitio a un
   subdominio nuevo. Para privacidad real haría falta un login (no implementado, fue decisión).
+
+### Control de gasto en un endpoint abierto
+
+El link es la barrera de **acceso**; el `unique(message_id, rec_index)` de `call_transcript` es la
+barrera de **gasto**. `persona_transcribe` no se puede apuntar a audio arbitrario: solo procesa
+filas que creó un `persona_scan` a partir de WONs de pipelines configurados. Quien loopee el
+endpoint recibe `{remaining: 0}` y no gasta nada, porque una llamada ya transcripta no vuelve a
+Deepgram. Encima hay un tope diario de minutos (`config.persona_daily_minutes_cap`, 600 por
+defecto) que solo cuenta lo que pasa por Deepgram — Retell es gratis y no consume cuota.
+
+⚠️ `retell_api_key` es la key de **producción con acceso total** (puede crear llamadas y gastar
+saldo). Acá se usa solo para leer (`GET /v2/get-call`). Ningún endpoint la devuelve al cliente,
+pero conviene reemplazarla por una de solo lectura cuando se pueda.
 # Rebuilt
