@@ -2066,12 +2066,32 @@ function personaAggregate(extracts: any[]) {
 // formatean con separador de miles antes: si no, escribe "$12500".
 function usd(v: number | null): string { return v == null ? "-" : "$" + v.toLocaleString("en-US"); }
 
+// Los vocabularios cerrados son claves de máquina; el modelo copia lo que ve, así
+// que si le llega `trades_contractors` lo escribe tal cual y la persona termina
+// pareciendo un volcado de base. Se humanizan ANTES de que las vea.
+const HUMAN: Record<string, string> = {
+  trades_contractors: "trades & contractors", transport_auto: "transport & auto",
+  food_retail: "food & retail", health_services: "health & services",
+  relief_now: "relief now", keep_business_alive: "keeping the business alive",
+  legal_protection: "legal protection", get_unstuck_credit: "unblocking real credit",
+  fairness: "fairness", avoid_bankruptcy: "avoiding bankruptcy",
+  prior_broker_burn: "burned by a prior broker", harassment_or_lawsuits: "harassment or lawsuits",
+  upfront_fee: "paying anything upfront", credit_impact: "impact on their credit",
+  needs_to_think_or_consult: "needs to think or consult a partner",
+  lender_relationship: "their relationship with the current lender",
+  needs_future_capital: "needing capital again later",
+  unpayable_debit: "an unpayable debit", ucc_lien: "a UCC lien", lawsuit: "a lawsuit",
+  cash_flow_crisis: "a cash-flow crisis", revenue_loss: "lost revenue",
+  stacking_spiral: "the stacking spiral", other: "other",
+};
+function hum(k: string): string { return HUMAN[k] || String(k || "").replace(/_/g, " "); }
+
 function aggMd(a: any): string {
   const L: string[] = [];
   const line = (k: string, v: string) => L.push(k + ": " + v);
   line("N", a.n + " won deals (each = one distinct buyer)");
-  if (a.industries.length) line("industry", a.industries.map((x: any) => x.k + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
-  if (a.states.length) line("states", a.states.map((x: any) => x.k + " " + x.n).join(" · "));
+  if (a.industries.length) line("industry", a.industries.map((x: any) => hum(x.k) + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
+  if (a.states.length) line("states", a.states.map((x: any) => x.k.toUpperCase() + " " + x.n).join(" · "));
   if (a.debt.stated) line("debt_total_usd", "median " + usd(a.debt.median) + ", range " + usd(a.debt.min) + "-" + usd(a.debt.max) + ", stated by " + a.debt.stated + "/" + a.n);
   if (a.payment.stated) line("payment", "median " + usd(a.payment.median) + ", stated by " + a.payment.stated + "/" + a.n
     + (a.payment.cadence.length ? " · cadence " + a.payment.cadence.map((x: any) => x.k + " " + x.n).join("/") : ""));
@@ -2079,9 +2099,9 @@ function aggMd(a: any): string {
   if (a.years.stated) line("years_in_business", "median " + a.years.median + ", stated by " + a.years.stated + "/" + a.n);
   line("language", "spanish " + a.language.spanish + "/" + a.n + " (" + a.language.share + "%)");
   if (a.wantsToPay.stated) line("wants_to_pay", a.wantsToPay.yes + "/" + a.wantsToPay.stated + " stated");
-  if (a.triggers.length) line("triggers", a.triggers.map((x: any) => x.k + " " + x.n + "/" + a.n).join(" · "));
-  if (a.objections.length) line("objections", a.objections.map((x: any) => x.k + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
-  if (a.drivers.length) line("drivers", a.drivers.map((x: any) => x.k + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
+  if (a.triggers.length) line("triggers", a.triggers.map((x: any) => hum(x.k) + " " + x.n + "/" + a.n).join(" · "));
+  if (a.objections.length) line("objections", a.objections.map((x: any) => hum(x.k) + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
+  if (a.drivers.length) line("drivers", a.drivers.map((x: any) => hum(x.k) + " " + x.n + "/" + a.n + " (" + pct(x.n, a.n) + "%)").join(" · "));
   if (a.lenders.length) line("lenders_named", a.lenders.map((x: any) => x.k + " " + x.n).join(" · "));
   L.push("verbatims (owner's own words, pooled):");
   for (const v of a.verbatims) L.push('  - "' + v + '"');
@@ -2095,6 +2115,7 @@ async function personaWrite(akey: string, cfgRow: any, agg: any, srcLabel: strin
     "You write the BUYER PERSONA panel of a sales-intelligence dashboard for a U.S. debt-restructuring firm.",
     "Your input is an AGGREGATE table computed in code from " + agg.n + " closed-won deals, plus the buyers' own pooled verbatims. You did NOT see the raw calls.",
     "BINDING RULE ON NUMBERS: every number you write must appear verbatim in the AGGREGATE block, together with its denominator. If a claim has no number in the block, state it qualitatively with NO number at all. Inventing, rounding or extrapolating a statistic is a failure.",
+    "Write for a human reader: never output a snake_case token or a raw field name (industry_group, wants_to_pay, cash_flow_crisis). Use the plain-English wording exactly as it appears in the AGGREGATE block. US state codes go in capitals.",
     "AGGREGATE AND ANONYMOUS: describe the population, never an individual. Never write a person's or business's name. 'One owner in Dallas told us…' is banned; 'most owners describe…' is right.",
     "Mirror the pooled verbatims exactly when you quote them — do not paraphrase or clean them up.",
     thin
