@@ -144,10 +144,40 @@ comprador, no el audio.
 
 | Vertical | Compradores ganados | Fuente | Estado |
 |---|--:|---|---|
-| MCA | 72 (71 con llamada) | closer, GHL → Deepgram | ⏳ encoladas; **falta `deepgram_api_key`**. Muestra el doc curado a mano (67 deals), etiquetado como tal. `persona_build` se **niega** a reemplazarlo mientras haya tan poca evidencia leída. |
+| MCA | 70 leídos (de 72 ganados) | closer, GHL → Deepgram | ✅ generado · 71/71 llamadas transcriptas · 1.992 min · confianza media |
 | Credit Card | 2 | AI setter, Retell | ✅ generado, con aviso de muestra chica |
 
 ⚠️ Credit Card tiene **2 deals**. Es direccional, no estadístico, y el dashboard lo dice.
+
+### Validación convergente (MCA, 13/08/2026)
+
+La persona generada desde las 70 llamadas se contrastó contra el documento que
+una persona escribió a mano sobre esta misma población. Partiendo de audio
+transcripto de forma independiente:
+
+| | Escrito a mano (67) | Generado (70) |
+|---|---|---|
+| Deuda mediana | $111k | **$118,5k** |
+| Posiciones apiladas | 2 a 6 · 9 de cada 10 | mediana **3** · 57/65 con 2+ |
+| Pago | $3k-$20k/semana | mediana **$4.500**, semanal en 61 |
+| Oficios/contratistas | 55% | **37,1%** |
+| Quemado por un bróker previo | 25% | **30%** |
+| Acoso o juicios | 24% | **30%** |
+| Pago por adelantado | 31% | **25,7%** |
+| Impacto en el crédito | 13% | **10%** |
+| Alivio ya (driver #1) | 90% | **94,3%** |
+| Protección legal | 24% | **35,7%** |
+
+Las objeciones y los drivers caen casi encima. Diverge el share de español
+(17% a mano vs 8,6%) y el peso de los oficios, que acá se reparte más entre
+food & retail.
+
+> **Lección que dejó el primer intento:** con los campos categóricos en texto
+> libre, la persona concluyó *"ninguna industria domina"* — porque "construction",
+> "general contracting" y "commercial site work/construction" contaban por
+> separado. Y `wants_to_pay` volvió 60 `true` / 0 `false` / 5 con montos en
+> dólares: cero desacuerdos no es un dato, es un extractor que infiere. Por eso
+> los vocabularios están cerrados y `wants_to_pay` exige mención explícita.
 
 ---
 
