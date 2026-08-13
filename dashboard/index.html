@@ -260,8 +260,8 @@ tr.can{cursor:pointer}
      cambió es de dónde salen los datos. -->
 <div id="view-persona" class="view pv" hidden>
   <div class="controls" style="margin-top:22px">
-    <div class="grp"><span class="lbl">Vertical</span><div class="grp" id="pTabs"></div></div>
-    <button class="pill" id="pCfgBtn" onclick="pToggleCfg()" title="Choose which closing pipelines feed this persona">⚙ Pipelines</button>
+    <div class="grp" id="pTabs"></div>
+    <button class="pill" id="pCfgBtn" onclick="pToggleCfg(false)" title="Choose which closing pipelines feed this persona">⚙ Pipelines</button>
     <button class="pill" id="pGenBtn" onclick="pRegenerate()" title="Re-reads the won calls and rewrites the persona">↻ Regenerate</button>
   </div>
   <div id="pCfg" hidden></div>
@@ -439,10 +439,15 @@ function pRender(d){
 }
 function byId(arr,id){ return (arr||[]).filter(function(x){return x.id==id})[0]||null; }
 
-/* ---- selección de pipelines: acá es donde se suma un buyer nuevo ---- */
-function pToggleCfg(){
+/* ---- selección de pipelines: acá es donde se suma un buyer nuevo ----
+   Sin prompt() ni alert(): los dialogos nativos del navegador se parecen a un
+   pedido de credenciales y esta app nunca pide una. Todo pasa en el panel. */
+var PNEW=false;
+
+function pToggleCfg(isNew){
   var el=document.getElementById("pCfg");
-  if(!el.hidden){ el.hidden=true; return; }
+  if(!el.hidden && !isNew){ el.hidden=true; PNEW=false; return; }
+  PNEW=!!isNew;
   el.hidden=false;
   el.innerHTML='<div class="sub" style="margin-top:18px"><span class="spin"></span>Reading the pipelines from GoHighLevel…</div>';
   (PIPES?Promise.resolve({pipelines:PIPES}):fetch(EP+"?action=ghl_pipelines").then(function(r){return r.json()}))
@@ -451,8 +456,26 @@ function pToggleCfg(){
       PIPES=d.pipelines; pCfgRender();
     }).catch(function(e){ el.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
 }
+function pNew(){ if(PRUN) return; pToggleCfg(true); }
+
+// El identificador interno sale del nombre. Es un detalle de implementacion:
+// no hay razon para que alguien lo escriba, y menos en un cuadro de dialogo.
+function pSlug(label){
+  var k=String(label||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
+        .replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,24).replace(/_+$/,"");
+  if(k.length<2) k="persona";
+  var taken={}; (PERSONAS||[]).forEach(function(p){taken[p.key]=1});
+  if(!taken[k]) return k;
+  for(var n=2;n<99;n++){ var c=(k+"_"+n).slice(0,24).replace(/_+$/,""); if(!taken[c]) return c; }
+  return k;
+}
+function pCfgMsg(t,bad){
+  var el=document.getElementById("pf_msg"); if(!el) return;
+  el.innerHTML = t ? '<span style="color:'+(bad?'var(--danger)':'var(--green)')+'">'+t+'</span>' : '';
+}
 function pCfgRender(){
-  var cur=pCur()||{key:ST.persona,label:ST.persona,pipelines:[],minSample:15};
+  var cur = PNEW ? {key:"",label:"",pipelines:[],minSample:15}
+                 : (pCur()||{key:ST.persona,label:ST.persona,pipelines:[],minSample:15});
   var on={}; (cur.pipelines||[]).forEach(function(p){on[p.id]=1});
   var boxes=PIPES.map(function(p){
     return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13.5px;line-height:1.4;padding:5px 0;cursor:pointer">'
@@ -462,39 +485,38 @@ function pCfgRender(){
   }).join("");
   document.getElementById("pCfg").innerHTML =
     '<div class="gform" style="grid-template-columns:1fr 1fr">'
-    + '<div class="gfield"><label>Name</label><input id="pf_label" value="'+esc(cur.label)+'"></div>'
+    + '<div class="gfield"><label>'+(PNEW?'Name of the new vertical':'Name')+'</label>'
+    + '<input id="pf_label" value="'+esc(cur.label)+'" placeholder="'+(PNEW?'e.g. Personal Loans':'')+'" oninput="pCfgMsg(\'\')"></div>'
     + '<div class="gfield"><label>Small-sample threshold <span class="opt">(warn below this many won deals)</span></label>'
     + '<input id="pf_min" type="number" min="1" max="500" value="'+(cur.minSample||15)+'"></div>'
     + '<div class="gfield gf-wide"><label>Closing pipelines that feed this persona</label>'
     + '<div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--background)">'+boxes+'</div></div>'
-    + '<div class="gfield gf-wide gf-actions"><button class="gbtn" onclick="pSave()">Save</button>'
-    + '<span class="ghint">Won deals in these pipelines are the evidence. Saving does not regenerate — hit ↻ Regenerate after.</span></div></div>';
+    + '<div class="gfield gf-wide gf-actions"><button class="gbtn" id="pf_save" onclick="pSave()">'+(PNEW?'Create vertical':'Save')+'</button>'
+    + (PNEW?'<button class="pill" onclick="pToggleCfg()">Cancel</button>':'')
+    + '<span class="ghint" id="pf_msg">Won deals in these pipelines are the evidence. Saving does not regenerate — hit ↻ Regenerate after.</span>'
+    + '</div></div>';
 }
 function pSave(){
+  var label=document.getElementById("pf_label").value.trim();
+  if(PNEW && !label){ pCfgMsg("Give the vertical a name first.",true); return; }
+  var key = PNEW ? pSlug(label) : ST.persona;
   var picked=[].slice.call(document.querySelectorAll('#pCfg input[type=checkbox]'))
     .filter(function(c){return c.checked})
     .map(function(c){return {id:c.getAttribute("data-pid"), name:c.getAttribute("data-pname")}});
-  var body={ key:ST.persona, label:document.getElementById("pf_label").value.trim()||ST.persona,
+  var body={ key:key, label:label||key,
              minSample:parseInt(document.getElementById("pf_min").value)||15, pipelines:picked };
+  if(PNEW) body.sort=900;
+  var btn=document.getElementById("pf_save"); btn.disabled=true;
+  pCfgMsg("Saving…");
   fetch(EP+"?action=persona_save",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)})
     .then(function(r){return r.json()}).then(function(d){
-      if(d.error){ alert(d.error); return; }
-      PERSONAS=null; document.getElementById("pCfg").hidden=true; pBoot();
-    }).catch(function(e){ alert(String(e)); });
-}
-function pNew(){
-  var k=prompt("Key for the new vertical (lowercase, no spaces — e.g. 'personal_loans')");
-  if(!k) return;
-  k=k.trim().toLowerCase();
-  if(!/^[a-z0-9_-]{2,24}$/.test(k)){ alert("Only a-z, 0-9, _ and -, between 2 and 24 characters."); return; }
-  var label=prompt("Display name","")||k;
-  fetch(EP+"?action=persona_save",{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({key:k,label:label,pipelines:[],minSample:15,sort:900})})
-    .then(function(r){return r.json()}).then(function(d){
-      if(d.error){ alert(d.error); return; }
-      PERSONAS=null; ST.persona=k; pBoot();
-      setTimeout(function(){ document.getElementById("pCfg").hidden=true; pToggleCfg(); },400);
-    });
+      btn.disabled=false;
+      if(d.error){ pCfgMsg(esc(d.error),true); return; }
+      var wasNew=PNEW; PNEW=false; PERSONAS=null;
+      if(wasNew) ST.persona=key;
+      document.getElementById("pCfg").hidden=true;
+      pBoot();
+    }).catch(function(e){ btn.disabled=false; pCfgMsg(esc(String(e)),true); });
 }
 
 /* ---- Regenerar: scan -> transcribe -> extract -> build.
@@ -513,7 +535,10 @@ function pCall(action,key,extra){
 function pRegenerate(){
   if(PRUN) return;
   var cur=pCur();
-  if(cur && !(cur.pipelines||[]).length){ alert("This persona has no pipelines yet — pick them under \u2699 Pipelines first."); return; }
+  if(cur && !(cur.pipelines||[]).length){
+    pDone("This vertical has no pipelines yet \u2014 open <b>\u2699 Pipelines</b> and tick the closing pipelines that feed it.", true);
+    return;
+  }
   var key=ST.persona;                      // fijada para toda la corrida
   PRUN=true;
   var btn=document.getElementById("pGenBtn"); btn.classList.add("on"); btn.style.pointerEvents="none";
@@ -722,7 +747,12 @@ function aiRead(){
     .then(function(r){return r.json()})
     .then(function(d){
       if(opFail(d)){ if(b){b.textContent='Get analysis';b.disabled=false;} return; }
-      if(d.error){ if(b){b.textContent='Get analysis';b.disabled=false;} alert(d.error); return; }
+      if(d.error){
+        if(b){b.textContent='Get analysis';b.disabled=false;}
+        var box=document.getElementById('aiInside');
+        if(box) box.insertAdjacentHTML('beforeend','<div class="gen-err">'+esc(d.error)+'</div>');
+        return;
+      }
       AI_READ_CACHE[ST.win]={findings:d.findings||null, narrative:d.narrative||null}; aiInside();
     })
     .catch(function(){ if(b){b.textContent='Get analysis';b.disabled=false;} });
