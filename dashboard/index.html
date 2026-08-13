@@ -456,8 +456,9 @@ function pCfgRender(){
   var on={}; (cur.pipelines||[]).forEach(function(p){on[p.id]=1});
   var boxes=PIPES.map(function(p){
     return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13.5px;line-height:1.4;padding:5px 0;cursor:pointer">'
-      + '<input type="checkbox" data-pid="'+esc(p.id)+'" data-pname="'+esc(p.name)+'"'+(on[p.id]?' checked':'')+' style="margin-top:2px">'
-      + '<span>'+esc(p.name)+(p.closing?'':' <span style="color:var(--muted-2)">· not a closing pipeline</span>')+'</span></label>';
+      // width:auto porque `.gfield input` fuerza width:100% y estiraba el checkbox
+      + '<input type="checkbox" data-pid="'+esc(p.id)+'" data-pname="'+esc(p.name)+'"'+(on[p.id]?' checked':'')+' style="margin-top:2px;width:auto;flex:0 0 auto">'
+      + '<span style="flex:1">'+esc(p.name)+(p.closing?'':' <span style="color:var(--muted-2)">· not a closing pipeline</span>')+'</span></label>';
   }).join("");
   document.getElementById("pCfg").innerHTML =
     '<div class="gform" style="grid-template-columns:1fr 1fr">'
