@@ -1891,12 +1891,26 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
 // La regla dura del prompt es `null` cuando el dato no se dijo: un campo vacío es
 // señal, uno inventado envenena la persona entera. Y el esquema no tiene campo
 // para nombre de persona ni de empresa — el anonimato es estructural, no un pedido.
-const EXTRACT_SCHEMA = '{"industry":"short label or null","years_in_business":null,'
-  + '"debt_total_usd":null,"n_positions":null,"payment_amount_usd":null,'
+// Vocabularios FIJOS. Sin esto el modelo devuelve texto libre y el conteo se
+// pulveriza: "construction", "general contracting" y "commercial site work/
+// construction" cuentan como tres industrias distintas, y la persona concluye
+// "ninguna industria domina" — que es un artefacto, no un hallazgo. Lo mismo
+// pasaba con drivers ("reduce weekly payment burden" vs "lower weekly payment"
+// vs "reduce weekly payments" = tres cosas). Las categorías salen del documento
+// que un humano escribió sobre esta misma población, así que están validadas.
+const EX_INDUSTRY = ["trades_contractors", "transport_auto", "food_retail", "health_services", "other"];
+const EX_DRIVERS = ["relief_now", "legal_protection", "get_unstuck_credit", "fairness", "avoid_bankruptcy", "keep_business_alive", "other"];
+const EX_OBJECTIONS = ["prior_broker_burn", "harassment_or_lawsuits", "upfront_fee", "credit_impact", "needs_to_think_or_consult", "lender_relationship", "needs_future_capital", "other"];
+const EX_TRIGGERS = ["unpayable_debit", "ucc_lien", "lawsuit", "prior_broker_burn", "cash_flow_crisis", "revenue_loss", "stacking_spiral", "other"];
+
+const EXTRACT_SCHEMA = '{"industry":"free-text label or null","industry_group":"one of ' + EX_INDUSTRY.join("|") + '",'
+  + '"years_in_business":null,"debt_total_usd":null,"n_positions":null,"payment_amount_usd":null,'
   + '"payment_cadence":"weekly|daily|monthly|null","lenders":[],"language":"en|es|null",'
   + '"geo_state":"2-letter US state or null","origin":"defensive|growth|null",'
-  + '"trigger":"short phrase or null","objections":[],"drivers":[],"wants_to_pay":null,'
-  + '"verbatims":[],"confidence":0.0}';
+  + '"trigger":"one of ' + EX_TRIGGERS.join("|") + ' or null",'
+  + '"objections":["from: ' + EX_OBJECTIONS.join("|") + '"],'
+  + '"drivers":["from: ' + EX_DRIVERS.join("|") + '"],'
+  + '"wants_to_pay":"true|false|null","verbatims":[],"confidence":0.0}';
 
 async function extractOne(akey: string, text: string): Promise<any | null> {
   const sys = [
@@ -1905,7 +1919,14 @@ async function extractOne(akey: string, text: string): Promise<any | null> {
     "- Use null (or an empty array) whenever the transcript does not state something. NEVER infer, guess, or fill from general knowledge. A missing field is useful signal; a fabricated one is poison.",
     "- NEVER output a person's name, business name, phone number, email or street address. There is no field for them. `lenders` holds only lender/creditor BRAND names (OnDeck, Rapid, Forward, a bank or card issuer) — never the merchant's own name.",
     "- `verbatims`: at most 5, at most 12 words each, quoted from the OWNER only, and only if they contain nothing identifying.",
-    "- `objections` and `drivers`: short lowercase phrases (e.g. 'burned by a prior broker', 'no upfront fee', 'relief now'). Max 5 each.",
+    "- CONTROLLED VOCABULARIES — these fields accept ONLY the listed values, verbatim. Never invent a new label, never rephrase one. If nothing fits, use 'other' (or omit, for the list fields).",
+    "  · industry_group: " + EX_INDUSTRY.join(" | ") + ". Map the business to its family: construction, electrical, plumbing, HVAC, flooring, painting, landscaping, cleaning, roofing and any contracting trade -> trades_contractors. Trucking, logistics, auto repair, auto parts -> transport_auto. Restaurants, bars, cafes, retail stores, dry cleaners, salons -> food_retail. Clinics, chiropractic, behavioral health, childcare, education, funeral homes, professional services -> health_services.",
+    "  · drivers (max 3, most important first): " + EX_DRIVERS.join(" | ") + ".",
+    "  · objections (max 3): " + EX_OBJECTIONS.join(" | ") + ".",
+    "  · trigger (exactly one, or null): " + EX_TRIGGERS.join(" | ") + ".",
+    "- Keep `industry` as the free-text description too (e.g. 'commercial flooring installation'), but `industry_group` MUST be one of the five values.",
+    "- `wants_to_pay` is a BOOLEAN and nothing else. true ONLY if the owner explicitly says they intend to honour the debt ('I'm not running from it', 'I want to pay what I owe'). false if they say they want out, to walk away, or to stop paying. null if they never address it — which is the COMMON case. Do not infer willingness from mere cooperation on the call.",
+    "- Respect every field's type. A dollar amount NEVER goes in wants_to_pay; a number never goes in a text field. If you are unsure of the type, use null.",
     "- Amounts in plain USD numbers, no symbols or text ('$4.2k/week' -> payment_amount_usd 4200, payment_cadence 'weekly').",
     "- `confidence` 0-1: how legible and substantive the transcript is. A mostly-empty or garbled call gets a low value.",
     "Respond with ONLY valid JSON matching the schema. No markdown fences, no prose.",
@@ -2021,7 +2042,7 @@ function personaAggregate(extracts: any[]) {
   const states = tally(extracts.map((e) => ({ s: e?.geo_state ? [e.geo_state] : [] })), "s", 8);
   return {
     n: N,
-    industries: tally(extracts.map((e) => ({ i: e?.industry ? [e.industry] : [] })), "i"),
+    industries: tally(extracts.map((e) => ({ i: e?.industry_group ? [e.industry_group] : [] })), "i"),
     states,
     debt: { median: med(debts), min: debts.length ? Math.min(...debts) : null,
             max: debts.length ? Math.max(...debts) : null, stated: debts.length },
