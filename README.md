@@ -303,15 +303,32 @@ Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
 
 ---
 
-## Crons (ambos pausados)
+## Crons (estado real, verificado 14/08/2026)
 
-| Job | Schedule | Estado | Por qué |
+`cron.job` tiene **una sola fila**:
+
+| Job | Schedule | Estado | Qué hace |
 |---|---|---|---|
-| `sms-secuencias-refresh-domingo` | `0 11 * * 0` | ⏸ pausado | La v3 de `sms-secuencias` guarda otro formato y rompería el dashboard viejo. |
-| `outreach-analytics-backfill` | `*/2 * * * *` | ⏸ pausado | Backfill terminado. |
+| `outreach-analytics-backfill` (jobid 1) | `*/2 * * * *` | ✅ activo | `work_tick()` → `?action=work`. **Solo drena.** |
 
-⚠️ **No apretar "Actualizar datos" en el dashboard viejo de Netlify**: llama a
-`sms-secuencias?action=refresh`, que guarda formato nuevo y lo rompe.
+> ⚠️ **Nada se actualiza solo.** `work_tick()` arranca contando
+> `cohort where not done and attempts < 3` y hace *early-return* si da 0 — el
+> `net.http_post` está después de esa guarda. O sea que el cron **procesa** lo que
+> otro encoló, pero **nunca inicia** una extracción.
+>
+> Las funciones `refresh_weekly()` y `seed_weekly()` siguen existiendo en la base,
+> pero **ningún cron las llama**: el job semanal se perdió en algún momento (no está
+> ni activo ni inactivo, no existe). Hasta que se re-programe, la única forma de
+> traer datos nuevos es el botón **↻ Refresh** del dashboard.
+>
+> Para reponerlo:
+> ```sql
+> select cron.schedule('outreach-weekly-refresh', '0 11 * * 0',
+>                      $$select sms_analytics.refresh_weekly();$$);
+> ```
+> Ojo con el motivo por el que falló en su momento (19/07): el token de GHL es
+> compartido con el producto Intro y se rate-limitea (429) cuando la extracción
+> masiva corre.
 
 ## Seguridad
 

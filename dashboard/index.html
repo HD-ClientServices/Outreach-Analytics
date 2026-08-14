@@ -51,7 +51,9 @@ tr.can{cursor:pointer}
 .controls{display:flex;gap:22px;align-items:center;flex-wrap:wrap}
 .grp{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-2);font-weight:500;margin-right:3px}
-.pill{padding:7px 15px;border-radius:999px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--background);color:var(--muted);user-select:none;transition:all .15s}
+/* font-family explícita: los <button class="pill"> (Refresh, Add a sequence) no
+   heredan la del body y salían en Arial mientras el resto iba en Inter. */
+.pill{font-family:var(--font-sans);padding:7px 15px;border-radius:999px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--background);color:var(--muted);user-select:none;transition:all .15s}
 .pill:hover{border-color:rgba(0,0,0,.25);color:var(--foreground)}
 .pill.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 .nd{color:var(--muted-2);font-family:var(--font-mono)}
@@ -244,7 +246,9 @@ tr.can{cursor:pointer}
 .wf-item:hover{background:var(--surface)}
 .wf-item.on{background:var(--highlight)}
 .wf-item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wf-item.done .nm{color:var(--muted)}
+.wf-item.done .nm{font-weight:500}
+.wf-group{position:sticky;top:0;z-index:1;padding:7px 13px;background:var(--card);border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
+.wf-group+.wf-item{border-top:none}
 .wf-st{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-2);white-space:nowrap}
 .wf-on{font-size:10.5px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--green-soft);color:var(--green);white-space:nowrap}
 .wf-empty{padding:16px 13px;font-size:13px;color:var(--muted-2)}
@@ -263,8 +267,7 @@ tr.can{cursor:pointer}
 .wf-tag.copied{background:var(--green-soft);border-color:var(--green)}
 .wf-tag.copied .c{color:var(--green)}
 .wf-acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
-.wf-drop{font-size:12.5px;color:var(--muted-2);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
-.wf-drop:hover{color:var(--danger)}
+.wf-drop:hover{border-color:var(--danger);color:var(--danger)}
 </style></head>
 <body><div class="wrap">
 <h1>Outreach <em>analytics</em>.</h1>
@@ -718,6 +721,16 @@ function wfToggle(){
     WFS=d.workflows||[]; wfRender();
   }).catch(function(e){ el.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
 }
+// El servidor manda las que ya se miden primero, pero al agregar o sacar una
+// mutamos la lista en memoria: sin reordenar acá, la recién agregada se queda
+// enterrada donde estaba y hay que volver a buscarla para tocarla.
+function wfSort(){
+  (WFS||[]).sort(function(a,b){
+    return (b.tracked?1:0)-(a.tracked?1:0)
+        || (a.status=="published"?0:1)-(b.status=="published"?0:1)
+        || String(a.name).localeCompare(String(b.name));
+  });
+}
 function wfSearch(v){ WFQ=v; wfList(); }
 function wfPick(id){
   var w=(WFS||[]).filter(function(x){return x.id==id})[0];
@@ -745,12 +758,22 @@ function wfList(){
   var q=WFQ.trim().toLowerCase();
   var rows=(WFS||[]).filter(function(w){ return !q || String(w.name).toLowerCase().indexOf(q)>=0 });
   if(!rows.length){ host.innerHTML='<div class="wf-empty">No workflow matches “'+esc(WFQ)+'”.</div>'; return; }
-  host.innerHTML=rows.map(function(w){
-    return '<div class="wf-item'+(WFSEL&&WFSEL.id==w.id?' on':'')+(w.tracked?' done':'')+'" onclick="wfPick(\''+esc(w.id)+'\')">'
+  // Las que ya se miden van arriba y con su propio encabezado: es el bloque que
+  // se busca para tocar algo, no los 145 workflows que nunca se van a medir.
+  var n=rows.filter(function(w){return w.tracked}).length;
+  var H="", was=null;
+  rows.forEach(function(w){
+    var t=!!w.tracked;
+    if(t!==was){
+      H+='<div class="wf-group">'+(t?('Measuring · '+n):('Not measured — '+(rows.length-n)+' more'))+'</div>';
+      was=t;
+    }
+    H+='<div class="wf-item'+(WFSEL&&WFSEL.id==w.id?' on':'')+(t?' done':'')+'" onclick="wfPick(\''+esc(w.id)+'\')">'
       + '<span class="nm">'+esc(w.name)+'</span>'
-      + (w.tracked?'<span class="wf-on">measuring</span>':'<span class="wf-st">'+esc(w.status||'')+'</span>')
+      + (t?'<span class="wf-on">measuring</span>':'<span class="wf-st">'+esc(w.status||'')+'</span>')
       + '</div>';
-  }).join("");
+  });
+  host.innerHTML=H;
 }
 function wfTagBox(t){
   return '<span class="wf-tag" onclick="wfCopy(this)" title="Click to copy"><span class="v">'+esc(t)+'</span><span class="c">copy</span></span>';
@@ -825,15 +848,15 @@ function wfSetup(){
    + '</div></div>';
 
   H+='<div class="wf-step"><div class="wf-no">3</div><div class="wf-step-b">'
-   + '<div class="wf-step-t">Then wait for contacts to come in</div>'
+   + '<div class="wf-step-t">Then hit ↻ Refresh to pull it in</div>'
    + 'Only contacts that enter <b>after</b> you add the tags carry them, so this sequence fills up from here on — it will not show past sends. '
-   + 'It appears on the next <b>↻ Refresh</b> (or the automatic Sunday run).'
+   + 'And nothing pulls it in on its own: the dashboard only goes looking when you press <b>↻ Refresh</b>.'
    + '</div></div>';
 
   H+='<div class="wf-acts">';
   if(on){
     H+='<button class="gbtn" onclick="wfToggle()">Done</button>'
-     + '<span class="wf-drop" onclick="wfRemove(\''+esc((live&&live.key)||w.key||"")+'\')">Stop measuring this sequence</span>';
+     + '<button class="pill wf-drop" onclick="wfRemove(\''+esc((live&&live.key)||w.key||"")+'\')">Stop measuring</button>';
   }else{
     H+='<button class="gbtn" id="wfAddBtn" onclick="wfAdd()">Start measuring it</button>'
      + '<span class="ghint">Adds the sequence to the dashboard. It sends nothing and changes nothing in GoHighLevel.</span>';
@@ -857,7 +880,9 @@ function wfAdd(){
       // El tag que vale es el que devolvió el servidor, no el que sugirió la lista.
       WFDONE={id:w.id,key:d.key,tag:d.tag,branchTags:d.branchTags};
       (WFS||[]).forEach(function(x){ if(x.id==w.id){ x.tracked=true; x.key=d.key; x.tag=d.tag; } });
-      wfRender();
+      // Se limpia la búsqueda a propósito: si queda filtrada, la secuencia recién
+      // agregada no se ve subir al bloque de arriba y parece que no pasó nada.
+      WFQ=""; wfSort(); wfRender();
     }).catch(function(e){ WFBUSY=false; if(b){b.disabled=false;b.textContent="Start measuring it";} wfMsg(esc(String(e)),true); });
 }
 function wfRemove(key){
@@ -868,8 +893,10 @@ function wfRemove(key){
     .then(function(r){return r.json()}).then(function(d){
       WFBUSY=false;
       if(d.error){ wfMsg(esc(d.error),true); return; }
+      // x.tag se deja como está: al borrar la fila ese tag vuelve a estar libre,
+      // así que sigue siendo el que se sugeriría al darla de alta de nuevo.
       (WFS||[]).forEach(function(x){ if(x.key==key){ x.tracked=false; x.key=null; } });
-      WFDONE=null; WFSEL=null; wfRender();
+      WFDONE=null; WFSEL=null; WFQ=""; wfSort(); wfRender();
     }).catch(function(e){ WFBUSY=false; wfMsg(esc(String(e)),true); });
 }
 
