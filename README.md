@@ -303,32 +303,30 @@ Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
 
 ---
 
-## Crons (estado real, verificado 14/08/2026)
+## Crons
 
-`cron.job` tiene **una sola fila**:
+| Job | Schedule | Qué hace |
+|---|---|---|
+| `outreach-analytics-backfill` (jobid 1) | `*/2 * * * *` | `work_tick()` → `?action=work`. **Solo drena.** |
+| `outreach-weekly-refresh` (jobid 2) | `0 11 * * 0` | `refresh_weekly()` → `?action=refresh`. **La ignición.** |
 
-| Job | Schedule | Estado | Qué hace |
-|---|---|---|---|
-| `outreach-analytics-backfill` (jobid 1) | `*/2 * * * *` | ✅ activo | `work_tick()` → `?action=work`. **Solo drena.** |
+Los dos son necesarios y hacen cosas distintas. `work_tick()` arranca contando
+`cohort where not done and attempts < 3` y hace *early-return* si da 0 — el
+`net.http_post` está después de esa guarda. O sea: **procesa lo que otro encoló,
+nunca inicia una extracción.** El que sale a buscar datos es el semanal.
 
-> ⚠️ **Nada se actualiza solo.** `work_tick()` arranca contando
-> `cohort where not done and attempts < 3` y hace *early-return* si da 0 — el
-> `net.http_post` está después de esa guarda. O sea que el cron **procesa** lo que
-> otro encoló, pero **nunca inicia** una extracción.
->
-> Las funciones `refresh_weekly()` y `seed_weekly()` siguen existiendo en la base,
-> pero **ningún cron las llama**: el job semanal se perdió en algún momento (no está
-> ni activo ni inactivo, no existe). Hasta que se re-programe, la única forma de
-> traer datos nuevos es el botón **↻ Refresh** del dashboard.
->
-> Para reponerlo:
-> ```sql
-> select cron.schedule('outreach-weekly-refresh', '0 11 * * 0',
->                      $$select sms_analytics.refresh_weekly();$$);
-> ```
-> Ojo con el motivo por el que falló en su momento (19/07): el token de GHL es
-> compartido con el producto Intro y se rate-limitea (429) cuando la extracción
-> masiva corre.
+> ⚠️ **Lección de agosto 2026.** El job semanal no existía: la línea que lo
+> agenda vivía comentada en el bloque de instrucciones de `schema_new_project.sql`
+> y nunca se corrió. Entre el 21/07 y el 14/08 el drenador registró **17.412
+> corridas "exitosas" sin traer un solo dato** — no hacer nada también cuenta
+> como éxito, así que el monitoreo se veía todo verde mientras la ingesta estaba
+> congelada hacía 4 días. Está agendado en
+> `migrations/20260814200000_schedule_weekly_refresh.sql` para que no se repita.
+
+Para verificar que la ingesta está viva, mirá el sello del dashboard: dice
+`Data through <fecha> · N days old` y se pone ámbar a los 8 días y rojo a los 15.
+Sale de `dataThrough`, que `build()` hornea leyendo `max(msg_events.sent_at)` —
+es la edad del DATO, no la del snapshot ni la de tu sesión.
 
 ## Seguridad
 
