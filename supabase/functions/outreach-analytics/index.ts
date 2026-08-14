@@ -697,8 +697,9 @@ function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string
   return "-";
 }
 
-// Piso de envíos para las secuencias sin copies oficiales cargados. Es el mismo
-// número que anuncia el dashboard ("only messages with 5+ sends").
+// Piso de envíos para las secuencias sin copies oficiales cargados. NO aplica a
+// cc/cold/defdec: esas se filtran contra su copy oficial y no tienen piso, por
+// más pocos envíos que tenga un mensaje.
 const NEW_SEQ_MIN_SENDS = 5;
 
 async function build(cfg?: Record<string, string>) {
