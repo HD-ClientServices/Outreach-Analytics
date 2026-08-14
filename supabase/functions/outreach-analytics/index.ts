@@ -787,6 +787,11 @@ function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string
 // más pocos envíos que tenga un mensaje.
 const NEW_SEQ_MIN_SENDS = 5;
 
+// Peso mínimo para que la fila de un mensaje SIN rama identificada valga la pena
+// al lado de las que sí la tienen. Es el mismo 1% con el que el desglose por
+// secuencia decide si dibuja "No branch".
+const BRANCHLESS_MIN_SHARE = 0.01;
+
 async function build(cfg?: Record<string, string>) {
   return await withDb(async (c) => {
     const out: any = { generatedAt: new Date().toISOString(), windows: {} };
@@ -889,8 +894,31 @@ async function build(cfg?: Record<string, string>) {
         // En las secuencias sin copies oficiales se suma el piso de envíos: sin él,
         // cada variante suelta de un mensaje sería su propia fila.
         const official = !!OFF_TEXT[wf];
-        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) =>
-          (e.canon || e.pos <= 50) && (official || e.sends >= NEW_SEQ_MIN_SENDS)).map((e: any) => ({
+        const rows = Object.values(agg[wf]) as any[];
+
+        // Los contactos cuya rama no se pudo determinar generaban una fila aparte
+        // para el MISMO mensaje: "3" al lado de "3A" y "3B", con 1 envío contra
+        // 4.612. En defdec no hay forma de desambiguarlos —del mensaje 3 en
+        // adelante las dos ramas comparten copy— así que la fila no se puede
+        // fusionar, solo esconder. Mismo criterio que la fila "No branch" del
+        // desglose por secuencia: se muestra únicamente si pesa algo. Si un día
+        // pesa, aparece sola y es una señal de que algo dejó de etiquetar.
+        const totalBySk: Record<string, number> = {};
+        const conRama: Record<string, boolean> = {};
+        for (const e of rows) {
+          const sk = skel(e.tmpl);
+          totalBySk[sk] = (totalBySk[sk] || 0) + e.sends;
+          if (e.branch && e.branch !== "-") conRama[sk] = true;
+        }
+        const material = (e: any) => {
+          if (e.branch && e.branch !== "-") return true;
+          const sk = skel(e.tmpl);
+          if (!conRama[sk]) return true;   // el mensaje no tiene ramas: esta fila ES el mensaje
+          return e.sends >= BRANCHLESS_MIN_SHARE * (totalBySk[sk] || 1);
+        };
+
+        msgsByWf[wf] = rows.filter((e: any) =>
+          (e.canon || e.pos <= 50) && (official || e.sends >= NEW_SEQ_MIN_SENDS) && material(e)).map((e: any) => ({
           tmpl: e.tmpl, pos: e.pos, branch: e.branch, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
           replyRate: e.sends ? Math.round(1000 * e.replies / e.sends) / 10 : 0,
           ltRate: e.sends ? Math.round(10000 * e.lts / e.sends) / 100 : 0,
