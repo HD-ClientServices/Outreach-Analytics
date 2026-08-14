@@ -727,14 +727,28 @@ async function build(cfg?: Record<string, string>) {
                  from sms_analytics.config where key='last_refresh_ms') as last_refresh`);
     out.dataThrough = fresh.rows[0]?.data_through ? new Date(fresh.rows[0].data_through).toISOString() : null;
     out.lastRefreshAt = fresh.rows[0]?.last_refresh ? new Date(fresh.rows[0].last_refresh).toISOString() : null;
+    // Cobertura del tag de rama en lo que entró ÚLTIMO. Es distinto de la
+    // cobertura de la ventana: dice si el workflow está bien configurado HOY,
+    // sin que lo tape el histórico anterior a que se agregara el tag. Cuando
+    // arranca una secuencia nueva no hay con qué opinar, así que va null.
+    const recent = await c.queryObject<{ wf: string; n: bigint; tagged: bigint }>(
+      `select wf, count(*)::bigint as n,
+              count(*) filter (where coalesce(branch,'-') <> '-')::bigint as tagged
+         from sms_analytics.cohort
+        where done and wf <> 'none' and entered_at >= now() - interval '7 days'
+        group by wf`);
+    const byRecent: Record<string, { n: number; tagged: number }> = {};
+    for (const r of recent.rows) byRecent[r.wf] = { n: Number(r.n), tagged: Number(r.tagged) };
+
     for (const win of [7, 14, 30]) {
-      const seqs = await c.queryObject<{ wf: string; ing: bigint; lt: bigint }>(
-        `select wf, count(*)::bigint as ing, count(*) filter (where won)::bigint as lt
+      const seqs = await c.queryObject<{ wf: string; ing: bigint; lt: bigint; tagged: bigint }>(
+        `select wf, count(*)::bigint as ing, count(*) filter (where won)::bigint as lt,
+                count(*) filter (where coalesce(branch,'-') <> '-')::bigint as tagged
          from sms_analytics.cohort
          where done and entered_at >= now() - ($1 || ' days')::interval
          group by wf`, [String(win)]);
-      const byWf: Record<string, { ing: number; lt: number }> = {};
-      for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt) };
+      const byWf: Record<string, { ing: number; lt: number; tagged: number }> = {};
+      for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt), tagged: Number(r.tagged) };
 
       // Mismo universo de contactos que `seqs` (done + ventana), partido por rama,
       // para que las ramas sumen el total de su secuencia.
@@ -807,15 +821,25 @@ async function build(cfg?: Record<string, string>) {
       }
       out.windows[win] = {
         sequences: WF.map((w) => {
-          const s = byWf[w.key] || { ing: 0, lt: 0 };
+          const s = byWf[w.key] || { ing: 0, lt: 0, tagged: 0 };
           const bm = byWfBr[w.key] || {};
           const branches = Object.keys(bm).sort().map((br) => ({
             branch: br, ing: bm[br].ing, lt: bm[br].lt,
             cr: bm[br].ing ? Math.round(10000 * bm[br].lt / bm[br].ing) / 100 : null,
           }));
+          // De dónde salen estas ramas. El tag es la señal buena; el texto del
+          // primer mensaje es un respaldo frágil (se rompe con que el contacto
+          // no tenga nombre) que quedó cubriendo el histórico previo al tag.
+          // Sin esto, una secuencia sin tag muestra ramas que parecen medidas y
+          // en realidad son adivinadas — que es justo lo que hay que poder ver.
+          const rc = byRecent[w.key];
+          const tagPct = s.ing ? Math.round(1000 * s.tagged / s.ing) / 10 : null;
+          const tagPctRecent = rc && rc.n >= 20 ? Math.round(1000 * rc.tagged / rc.n) / 10 : null;
+          const branchSource = !branches.length ? "none"
+            : (tagPct != null && tagPct >= 90 ? "tag" : "text");
           return { key: w.key, label: w.label, ing: s.ing, lt: s.lt,
             cr: s.ing ? Math.round(10000 * s.lt / s.ing) / 100 : null,
-            branches };
+            branches, tagPct, tagPctRecent, recentN: rc ? rc.n : 0, branchSource };
         }),
         unidentified: byWf["none"] || { ing: 0, lt: 0 },
         msgs: msgsByWf,

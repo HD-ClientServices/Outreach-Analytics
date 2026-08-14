@@ -62,6 +62,12 @@ tr.can{cursor:pointer}
 .pill.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 .nd{color:var(--muted-2);font-family:var(--font-mono)}
 .chip{font-size:10.5px;padding:2px 8px;border-radius:999px;background:var(--card);color:var(--muted-2);font-weight:500;margin-left:8px;white-space:nowrap}
+/* Ramas adivinadas por texto en vez de leídas del tag: sin esto se ven igual de
+   sólidas que las medidas, y el problema se hereda sin que nadie lo note. */
+.chip-warn{background:#fdf3e3;color:var(--amber)}
+.srcrow td{padding-top:9px;padding-bottom:11px}
+.brsrc{font-size:12px;line-height:1.55;color:var(--muted-2);padding-left:20px}
+.brsrc.src-warn{color:var(--amber)}
 .foot{margin-top:44px;font-size:12px;color:var(--muted-2);text-align:center;line-height:1.7}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--foreground);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:7px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -1010,6 +1016,40 @@ function aiRead(){
 }
 function wins(){document.getElementById("wins").innerHTML=[7,14,30].map(function(x){
   return '<span class="pill'+(ST.win==x?' on':'')+'" onclick="ST.win='+x+';render()">'+x+' days</span>'}).join("")}
+/* ---- De dónde salen las ramas ----
+   El tag `rama X` que pone el workflow es la señal buena. Cuando falta, el
+   backend cae a adivinar la rama por el texto del primer mensaje — un respaldo
+   frágil (se rompe con que el contacto no tenga nombre) que además queda
+   INVISIBLE: las ramas se ven igual de sólidas medidas que adivinadas. Esto lo
+   hace visible, que es la única forma de que no se degrade en silencio. */
+function tagChip(s){
+  if(s.branchSource!="text") return "";
+  // Si el workflow ya está poniendo el tag, lo adivinado es sólo el histórico que
+  // sigue dentro de la ventana: eso se corrige solo y no amerita alarma.
+  if(s.tagPctRecent!=null&&s.tagPctRecent>=90) return "";
+  return '<span class="chip chip-warn" title="These branches are guessed from the first message, not read from a rama tag">guessed branches</span>';
+}
+function branchSourceRow(s){
+  if(!s.branchSource||s.branchSource=="none") return "";
+  var reading = s.branchSource=="tag";
+  // La cobertura RECIENTE es la que dice si el workflow está bien hoy; la de la
+  // ventana puede estar arrastrada por el histórico previo al tag.
+  var rec = s.tagPctRecent;
+  var txt, cls;
+  if(reading){
+    txt='Branches read from the <b>rama</b> tag ('+s.tagPct+'% of contacts tagged).';
+    cls='';
+  }else{
+    txt='⚠ Branches <b>guessed from the message text</b> — only '+(s.tagPct||0)+'% of these contacts carry a <b>rama</b> tag. '
+       +'Add an <b>Add Tag</b> action inside each branch of this workflow in GoHighLevel.';
+    cls=' src-warn';
+    if(rec!=null&&rec>=90)
+      txt='Branches guessed from the message text for this window, but the workflow <b>is</b> tagging now ('
+         +rec+'% of the last 7 days). This corrects itself as the window rolls forward.';
+    if(rec!=null&&rec>=90) cls='';
+  }
+  return '<tr class="brrow srcrow"><td colspan="4"><div class="brsrc'+cls+'">'+txt+'</div></td></tr>';
+}
 function t1(){
   var rows=(W().sequences||[]).slice();
   rows.forEach(function(r){ r._cr = (r.ing ? 100*r.lt/r.ing : null); }); // CR crudo (2 decimales)
@@ -1021,10 +1061,11 @@ function t1(){
     var brs=(s.branches||[]).filter(function(b){return b.branch&&b.branch!="-"});
     var can=brs.length>1, open=can&&EXP[s.key];
     var h='<tr'+(can?' class="can" onclick="toggleSeq(\''+s.key+'\')"':'')+'>'
-      +'<td><div class="seqname">'+esc(s.label)+small
+      +'<td><div class="seqname">'+esc(s.label)+small+tagChip(s)
       +(can?'<span class="caret">'+(open?"▾":"▸")+'</span>':'')+'</div></td>'
       +'<td class="num">'+nf(s.lt)+'</td><td class="num">'+nf(s.ing)+'</td><td>'+bar(s._cr,mx)+'</td></tr>';
     if(open){
+      h+=branchSourceRow(s);
       h+=brs.map(function(b){
         var bcr=(b.ing?100*b.lt/b.ing:null);
         return '<tr class="brrow"><td><div class="brname">Branch '+esc(b.branch)+'</div></td>'
