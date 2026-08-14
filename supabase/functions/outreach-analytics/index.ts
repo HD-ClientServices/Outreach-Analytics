@@ -760,9 +760,22 @@ const CBR_CTE = `firstmsg as (
            where c.done and c.entered_at >= now() - ($1 || ' days')::interval
          )`;
 
-// Resuelve la rama a partir de lo que devuelve CBR_CTE. `tmpl` es el texto que
-// identifica la rama en cold: el mensaje mismo en la tabla de mensajes, o el
-// primero del contacto en el desglose por secuencia.
+// Rama de un MENSAJE, para la tabla de mensajes. Es una pregunta distinta de la
+// rama del CONTACTO: en cold cada copy pertenece a una sola rama por diseño, así
+// que la rama la define el texto y no a quién se le mandó. Un envío de un copy
+// de A a un contacto de B (re-entrada, envío manual) es una anomalía —6 sobre
+// 15.764— y no una fila aparte: sin esto el mismo mensaje aparecía dos veces,
+// como "1A" con 15.758 envíos y como "1B" con 6.
+//
+// En defdec al revés: del mensaje 3 en adelante las dos ramas comparten copy, así
+// que el texto no distingue nada y lo único que informa es el contacto.
+function msgBranchOf(tagBr: string | null, wf: string, tmpl: string | null): string {
+  if (wf === "cold") return tmpl ? (coldBranchOf(tmpl) || "-") : "-";
+  if (tagBr && tagBr !== "-") return tagBr;
+  return "-";
+}
+
+// Resuelve la rama del CONTACTO a partir de lo que devuelve CBR_CTE.
 function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string {
   if (tagBr && tagBr !== "-") return tagBr;
   if (wf === "cold" && tmpl) return coldBranchOf(tmpl) || "-";
@@ -859,7 +872,7 @@ async function build(cfg?: Record<string, string>) {
         // ruido se corta abajo por volumen (NEW_SEQ_MIN_SENDS).
         const text = OFF_TEXT[r.wf] ? OFF_TEXT[r.wf][sk] : r.tmpl;
         if (!text) continue;
-        const br = branchOf(r.br, r.wf, r.tmpl);
+        const br = msgBranchOf(r.br, r.wf, r.tmpl);
         const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
         const gk = sk + "¦" + br;
