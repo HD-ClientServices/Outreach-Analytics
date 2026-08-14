@@ -27,9 +27,10 @@ GHL API v2 ──▶ edge function `outreach-analytics` ──▶ sms_analytics.
 ### El problema que resuelve el diseño
 
 La API de GHL **no expone `workflowId` en los mensajes**. No hay forma de preguntar
-"¿qué workflow mandó este SMS?". Se atribuye el **contacto** comparando su **primer SMS
-outbound** contra el SMS 1 de cada workflow; a partir de ahí toda su conversación
-pertenece a esa secuencia.
+"¿qué workflow mandó este SMS?". La señal es el **tag**: cada workflow medido pone un tag
+al contacto apenas entra, y ese tag dice a qué secuencia pertenece toda su conversación.
+(El histórico previo a los tags se atribuyó comparando el **primer SMS outbound** contra el
+SMS 1 de cada workflow; para las ramas ese respaldo sigue vivo en `branchOf()`.)
 
 Además la API limita a 100 req/10s: bajar ~9.500 contactos son ~40 min, y una edge function
 muere a los ~150s. Por eso el pipeline es **por lotes**, empujado por cron.
@@ -44,6 +45,7 @@ muere a los ~150s. Por eso el pipeline es **por lotes**, empujado por cron.
 | `templates` | Diccionario `tmpl_key → texto`, para no repetir el texto en cada evento. |
 | `snapshots_v2` | Salida del `build`: las 3 ventanas precalculadas. |
 | `run` | Estado del backfill. |
+| `workflows` | Una fila por secuencia medida: `key`, `label`, `tags` (los tags de GHL que la marcan), `ghl_id`, `sort`. **Es el registro que da de alta una secuencia** — ver [Sumar una secuencia](#sumar-una-secuencia-nueva). |
 | `persona_config` · `persona_pipeline` | Una fila por vertical (`mca`, `cc`, …) y sus pipelines de Closing. **La selección de pipelines de la interfaz vive acá**, no en el código. |
 | `persona_won_opp` | Una fila por oportunidad ganada, con `extract` = la ficha del comprador. |
 | `call_transcript` | Cola **y** almacén de transcripciones. `unique(message_id, rec_index)`. |
@@ -69,6 +71,9 @@ Dos niveles de acceso (ver [Seguridad](#seguridad)):
 | `?action=data` | lectura | Último snapshot. Lo consume el dashboard. |
 | `?action=personas` / `persona_data` / `persona_status` | lectura | Verticales configuradas, el documento vigente y el estado de una corrida. |
 | `?action=ghl_pipelines` | lectura | Los pipelines de GHL, para la UI de selección. |
+| `?action=ghl_workflows` | lectura | Los workflows de GHL, marcando cuáles ya se miden y con qué tag. Lo consume "+ Add a sequence". |
+| `?action=workflow_add` | operador | POST `{id,name}` → da de alta la secuencia y devuelve el tag exacto que hay que poner en GHL. |
+| `?action=workflow_remove` | operador | POST `{key}` → deja de medirla. No borra `cohort`/`msg_events`. |
 | `?action=persona_save` | operador | Guarda una vertical y sus pipelines. Crear una nueva = POST con `key` nuevo. |
 | `?action=persona_scan&key=` | operador | Barre los WON de esos pipelines y encola sus llamadas. `&dry=1` no escribe. **Gratis.** |
 | `?action=persona_transcribe&key=` | operador | Drena la cola. Retell es gratis; GHL pasa por **Deepgram (gasta)**. |
@@ -91,6 +96,31 @@ select cron.alter_job(job_id := <id>, active := false);
 
 `work` es **idempotente y seguro ante solapamiento**: reclama filas con
 `for update skip locked` y borra los eventos previos del contacto antes de insertar.
+
+### Sumar una secuencia nueva
+
+Desde el dashboard: **Performance → “+ Add a sequence”** lista los workflows de la location,
+y al elegir uno muestra los tags exactos que hay que configurar en GHL. Sumar una secuencia
+**ya no es tocar código**: es una fila en `workflows`.
+
+El contrato son dos tags, y el nombre lo elige el sistema — si se escribe distinto, no clasifica:
+
+| Tag | Dónde va | Para qué |
+|---|---|---|
+| `secuencia <nombre del workflow>` | Primera acción del workflow, antes del 1er mensaje | Marca a qué secuencia pertenece el contacto |
+| `rama a`, `rama b`, … | Dentro de **cada** rama del split | Separa las ramas del A/B test |
+
+El tag lo deriva `tagFromName()` del nombre del workflow (sin acentos ni emojis, cortado en
+palabras enteras) y se desambigua con un sufijo si ya existe. La prioridad, cuando un contacto
+trae tags de dos secuencias, es la columna `sort` — la misma que ordena la lista en pantalla.
+
+Dos consecuencias que conviene decir en voz alta:
+
+- **Los tags no son retroactivos.** Solo los contactos que entran *después* de configurarlos
+  los llevan, así que una secuencia recién dada de alta arranca vacía y se llena de ahí en más.
+- **Las secuencias nuevas no tienen copies oficiales cargados** (`OFFICIAL` en `index.ts` es de
+  las 3 viejas). Para ellas el filtro es el tag mismo: se muestra el texto tal cual salió,
+  agrupado por esqueleto, con un piso de `NEW_SEQ_MIN_SENDS` envíos para cortar el ruido.
 
 ---
 

@@ -231,6 +231,40 @@ tr.can{cursor:pointer}
 .ai-find-d{font-size:12.5px;line-height:1.5;color:var(--muted);margin-top:4px}
 .ai-finds-by{margin:11px 24px 2px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
 @media (max-width:720px){.ai-cols{grid-template-columns:1fr}}
+
+/* ---- Add sequence: elegir un workflow de GHL y ponerlo a medir ---- */
+.wf-panel{margin-top:20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px}
+.wf-h{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.wf-sub{font-size:12.5px;color:var(--muted-2);margin-top:4px;line-height:1.5}
+.wf-search{font-family:var(--font-sans);font-size:14px;color:var(--foreground);background:var(--background);border:1px solid var(--border);border-radius:8px;padding:9px 11px;outline:none;width:100%;margin-top:14px}
+.wf-search:focus{border-color:var(--foreground)}
+.wf-list{max-height:290px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--background);margin-top:10px}
+.wf-item{display:flex;gap:10px;align-items:center;padding:10px 13px;border-bottom:1px solid var(--border-side);cursor:pointer;font-size:13.5px}
+.wf-item:last-child{border-bottom:none}
+.wf-item:hover{background:var(--surface)}
+.wf-item.on{background:var(--highlight)}
+.wf-item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wf-item.done .nm{color:var(--muted)}
+.wf-st{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-2);white-space:nowrap}
+.wf-on{font-size:10.5px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--green-soft);color:var(--green);white-space:nowrap}
+.wf-empty{padding:16px 13px;font-size:13px;color:var(--muted-2)}
+/* instrucciones */
+.wf-setup{margin-top:16px;background:var(--background);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px}
+.wf-ok{font-size:13.5px;font-weight:600;color:var(--green);margin-bottom:2px}
+.wf-name{font-size:14.5px;font-weight:600;letter-spacing:-.01em;line-height:1.4}
+.wf-step{display:flex;gap:12px;margin-top:16px}
+.wf-no{flex:0 0 auto;width:21px;height:21px;border-radius:6px;background:var(--card);font-family:var(--font-mono);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:1px}
+.wf-step-b{flex:1;min-width:0;font-size:13px;line-height:1.6;color:var(--muted)}
+.wf-step-t{font-size:13px;font-weight:600;color:var(--foreground);margin-bottom:3px}
+.wf-tags{display:flex;gap:8px;flex-wrap:wrap;margin:9px 0 2px}
+.wf-tag{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12.5px;color:var(--foreground);background:var(--highlight);border:1px solid rgba(0,0,0,.08);border-radius:7px;padding:6px 10px;cursor:pointer;user-select:none}
+.wf-tag:hover{border-color:rgba(0,0,0,.28)}
+.wf-tag .c{font-family:var(--font-sans);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-2)}
+.wf-tag.copied{background:var(--green-soft);border-color:var(--green)}
+.wf-tag.copied .c{color:var(--green)}
+.wf-acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+.wf-drop{font-size:12.5px;color:var(--muted-2);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.wf-drop:hover{color:var(--danger)}
 </style></head>
 <body><div class="wrap">
 <h1>Outreach <em>analytics</em>.</h1>
@@ -248,8 +282,12 @@ tr.can{cursor:pointer}
       <div class="sub" style="margin-top:0">Performance by sequence · Live transfers ÷ contacts entered</div>
       <div class="stamp" id="stamp"></div>
     </div>
-    <button class="pill" id="refreshBtn" onclick="startRefresh()" title="Pulls new activity since the last refresh (on top of the automatic Sunday run)">↻ Refresh</button>
+    <div class="grp">
+      <button class="pill" id="addSeqBtn" onclick="wfToggle()" title="Pick a GoHighLevel workflow and start measuring its messages">+ Add a sequence</button>
+      <button class="pill" id="refreshBtn" onclick="startRefresh()" title="Pulls new activity since the last refresh (on top of the automatic Sunday run)">↻ Refresh</button>
+    </div>
   </div>
+  <div id="wfPanel" hidden></div>
   <div id="app"><div class="sub" style="margin-top:36px"><span class="spin"></span>Loading…</div></div>
   <div class="foot" id="foot"></div>
 </div>
@@ -309,7 +347,14 @@ function opKey(){ return ""; }
 function opParam(){ return ""; }
 function opFail(d){ return false; }
 var DATA=null;
-var ORDER=["cc","cold","defdec"];
+// Las secuencias medidas salen del snapshot (tabla `workflows`), no de una lista
+// escrita acá: una secuencia dada de alta desde "+ Add a sequence" tiene que
+// aparecer en los pills sola. ORDER queda solo como respaldo si no hay dato.
+var ORDER=["cold","cc","defdec"];
+function seqOrder(){
+  var w=W(), ks=w&&w.sequences?w.sequences.map(function(s){return s.key}):[];
+  return ks.length?ks:ORDER;
+}
 var ST={win:30, tab:"cc", sort:"pos", metric:"reply", branch:"All", persona:"mca"};
 var EXP={}; // secuencias con el desglose por rama abierto, por key
 
@@ -653,6 +698,181 @@ function genCopyBox(el){
   });
 }
 
+/* ================= ADD A SEQUENCE =================
+   Elegir un workflow de GHL y ponerlo a medir. Lo que hace medible a una
+   secuencia es el TAG que el workflow le pone al contacto al entrar, así que el
+   panel no termina en "listo": termina en las instrucciones con el nombre exacto
+   del tag, que lo elige el sistema (si el usuario lo escribe distinto, no
+   clasifica). El alta recién ocurre al confirmar — un click en la lista solo
+   muestra qué habría que configurar. */
+var WFS=null, WFQ="", WFSEL=null, WFDONE=null, WFBUSY=false;
+
+function wfToggle(){
+  var el=document.getElementById("wfPanel");
+  if(!el.hidden){ el.hidden=true; return; }
+  el.hidden=false; WFSEL=null; WFDONE=null; WFQ="";
+  if(WFS){ wfRender(); return; }
+  el.innerHTML='<div class="wf-panel"><div class="sub" style="margin-top:0"><span class="spin"></span>Reading your workflows from GoHighLevel…</div></div>';
+  fetch(EP+"?action=ghl_workflows").then(function(r){return r.json()}).then(function(d){
+    if(d.error){ el.innerHTML='<div class="gen-err">'+esc(d.error)+'</div>'; return; }
+    WFS=d.workflows||[]; wfRender();
+  }).catch(function(e){ el.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
+}
+function wfSearch(v){ WFQ=v; wfList(); }
+function wfPick(id){
+  var w=(WFS||[]).filter(function(x){return x.id==id})[0];
+  if(!w) return;
+  WFSEL = (WFSEL&&WFSEL.id==id) ? null : w;   // volver a clickear cierra
+  WFDONE=null; wfRender();
+}
+function wfRender(){
+  var n=(WFS||[]).filter(function(w){return w.tracked}).length;
+  document.getElementById("wfPanel").innerHTML =
+    '<div class="wf-panel">'
+    + '<div class="wf-h">Add a sequence to measure</div>'
+    + '<div class="wf-sub">Pick the GoHighLevel workflow whose messages you want to track. '
+    + n+' of '+((WFS||[]).length)+' workflows are being measured today.</div>'
+    + '<input class="wf-search" id="wfQ" placeholder="Search workflows…" value="'+esc(WFQ)+'" oninput="wfSearch(this.value)">'
+    + '<div class="wf-list" id="wfList"></div>'
+    + '<div id="wfSetup"></div>'
+    + '</div>';
+  var q=document.getElementById("wfQ");
+  if(q && WFQ){ q.focus(); q.setSelectionRange(WFQ.length,WFQ.length); }
+  wfList(); wfSetup();
+}
+function wfList(){
+  var host=document.getElementById("wfList"); if(!host) return;
+  var q=WFQ.trim().toLowerCase();
+  var rows=(WFS||[]).filter(function(w){ return !q || String(w.name).toLowerCase().indexOf(q)>=0 });
+  if(!rows.length){ host.innerHTML='<div class="wf-empty">No workflow matches “'+esc(WFQ)+'”.</div>'; return; }
+  host.innerHTML=rows.map(function(w){
+    return '<div class="wf-item'+(WFSEL&&WFSEL.id==w.id?' on':'')+(w.tracked?' done':'')+'" onclick="wfPick(\''+esc(w.id)+'\')">'
+      + '<span class="nm">'+esc(w.name)+'</span>'
+      + (w.tracked?'<span class="wf-on">measuring</span>':'<span class="wf-st">'+esc(w.status||'')+'</span>')
+      + '</div>';
+  }).join("");
+}
+function wfTagBox(t){
+  return '<span class="wf-tag" onclick="wfCopy(this)" title="Click to copy"><span class="v">'+esc(t)+'</span><span class="c">copy</span></span>';
+}
+// El tag tiene que quedar EXACTO, así que copiarlo no puede fallar en silencio:
+// si el navegador no da la Clipboard API, se copia por selección a la vieja usanza.
+function wfCopy(el){
+  var v=el.querySelector(".v"); if(!v) return;
+  var txt=v.textContent, ok=function(){
+    el.classList.add("copied"); el.querySelector(".c").textContent="copied ✓";
+    clearTimeout(el._t);
+    el._t=setTimeout(function(){el.classList.remove("copied");el.querySelector(".c").textContent="copy"},1500);
+  };
+  var legacy=function(){
+    var done=false;
+    try{
+      var ta=document.createElement("textarea");
+      ta.value=txt; ta.setAttribute("readonly","");
+      ta.style.cssText="position:fixed;top:0;left:-9999px";
+      document.body.appendChild(ta); ta.select();
+      done=document.execCommand("copy");
+      document.body.removeChild(ta);
+    }catch(e){}
+    if(done){ ok(); return; }
+    // Ni una ni otra: se deja el tag seleccionado para que un ⌘C lo levante. Que
+    // el click no haga NADA es lo único inaceptable — el tag tiene que ir exacto.
+    try{
+      var rg=document.createRange(); rg.selectNodeContents(v);
+      var sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(rg);
+    }catch(e2){}
+    el.querySelector(".c").textContent="press ⌘C";
+    clearTimeout(el._t);
+    el._t=setTimeout(function(){el.querySelector(".c").textContent="copy"},2500);
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText)
+    navigator.clipboard.writeText(txt).then(ok).catch(legacy);
+  else legacy();
+}
+function wfSetup(){
+  var host=document.getElementById("wfSetup"); if(!host) return;
+  var w=WFSEL;
+  if(!w){ host.innerHTML=""; return; }
+  var live=WFDONE&&WFDONE.id==w.id ? WFDONE : null;       // ya dado de alta en esta pasada
+  var on=w.tracked||!!live;
+  var tag=(live&&live.tag)||w.tag||"";
+  var brs=(live&&live.branchTags)||w.branchTags||["rama a","rama b"];
+
+  var H='<div class="wf-setup">';
+  if(live) H+='<div class="wf-ok">Now measuring this sequence ✓</div>';
+  H+='<div class="wf-name">'+esc(w.name)+'</div>';
+  if(!tag){
+    H+='<div class="wf-sub" style="margin-top:10px">This workflow\'s name has no letters or numbers to build a tag from — rename it in GoHighLevel and reopen this panel.</div></div>';
+    host.innerHTML=H; return;
+  }
+  H+='<div class="wf-sub" style="margin-top:6px">'
+   + (on ? 'Make sure the workflow carries these tags — they are what tells the dashboard which contact belongs where.'
+         : 'Two things to set up in GoHighLevel so the messages become measurable.')+'</div>';
+
+  H+='<div class="wf-step"><div class="wf-no">1</div><div class="wf-step-b">'
+   + '<div class="wf-step-t">The sequence tag — as the first action of the workflow</div>'
+   + 'Add an <b>Add Tag</b> action at the very top, before the first message, named exactly:'
+   + '<div class="wf-tags">'+wfTagBox(tag)+'</div>'
+   + 'Every contact entering the workflow gets it, and that is how the dashboard knows the contact belongs to this sequence.'
+   + '</div></div>';
+
+  H+='<div class="wf-step"><div class="wf-no">2</div><div class="wf-step-b">'
+   + '<div class="wf-step-t">The branch tags — one inside every branch you A/B test</div>'
+   + 'If the workflow splits, add an <b>Add Tag</b> action inside <b>each</b> branch, named exactly:'
+   + '<div class="wf-tags">'+brs.map(wfTagBox).join("")+'</div>'
+   + 'Keep going with <span style="font-family:var(--font-mono)">rama c</span>, <span style="font-family:var(--font-mono)">rama d</span>… if you test more than two. '
+   + 'Without them the sequence is still measured — it just shows as a single branch instead of comparing them.'
+   + '</div></div>';
+
+  H+='<div class="wf-step"><div class="wf-no">3</div><div class="wf-step-b">'
+   + '<div class="wf-step-t">Then wait for contacts to come in</div>'
+   + 'Only contacts that enter <b>after</b> you add the tags carry them, so this sequence fills up from here on — it will not show past sends. '
+   + 'It appears on the next <b>↻ Refresh</b> (or the automatic Sunday run).'
+   + '</div></div>';
+
+  H+='<div class="wf-acts">';
+  if(on){
+    H+='<button class="gbtn" onclick="wfToggle()">Done</button>'
+     + '<span class="wf-drop" onclick="wfRemove(\''+esc((live&&live.key)||w.key||"")+'\')">Stop measuring this sequence</span>';
+  }else{
+    H+='<button class="gbtn" id="wfAddBtn" onclick="wfAdd()">Start measuring it</button>'
+     + '<span class="ghint">Adds the sequence to the dashboard. It sends nothing and changes nothing in GoHighLevel.</span>';
+  }
+  H+='</div><div id="wfMsg"></div></div>';
+  host.innerHTML=H;
+}
+function wfMsg(t,bad){
+  var el=document.getElementById("wfMsg"); if(!el) return;
+  el.innerHTML=t?'<div class="'+(bad?'gen-err':'sub')+'" style="margin-top:12px">'+t+'</div>':'';
+}
+function wfAdd(){
+  if(!WFSEL||WFBUSY) return;
+  var w=WFSEL, b=document.getElementById("wfAddBtn");
+  WFBUSY=true; if(b){b.disabled=true;b.textContent="Adding…";}
+  fetch(EP+"?action=workflow_add",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({id:w.id,name:w.name})})
+    .then(function(r){return r.json()}).then(function(d){
+      WFBUSY=false;
+      if(d.error){ if(b){b.disabled=false;b.textContent="Start measuring it";} wfMsg(esc(d.error),true); return; }
+      // El tag que vale es el que devolvió el servidor, no el que sugirió la lista.
+      WFDONE={id:w.id,key:d.key,tag:d.tag,branchTags:d.branchTags};
+      (WFS||[]).forEach(function(x){ if(x.id==w.id){ x.tracked=true; x.key=d.key; x.tag=d.tag; } });
+      wfRender();
+    }).catch(function(e){ WFBUSY=false; if(b){b.disabled=false;b.textContent="Start measuring it";} wfMsg(esc(String(e)),true); });
+}
+function wfRemove(key){
+  if(!key||WFBUSY) return;
+  WFBUSY=true; wfMsg("Removing…");
+  fetch(EP+"?action=workflow_remove",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({key:key})})
+    .then(function(r){return r.json()}).then(function(d){
+      WFBUSY=false;
+      if(d.error){ wfMsg(esc(d.error),true); return; }
+      (WFS||[]).forEach(function(x){ if(x.key==key){ x.tracked=false; x.key=null; } });
+      WFDONE=null; WFSEL=null; wfRender();
+    }).catch(function(e){ WFBUSY=false; wfMsg(esc(String(e)),true); });
+}
+
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function nf(v){return v==null?'<span class="nd">—</span>':v.toLocaleString("en-US")}
 function ago(iso){if(!iso)return"";var h=(Date.now()-new Date(iso).getTime())/3600000;
@@ -690,7 +910,7 @@ function render(){
   document.getElementById("stamp").textContent="Data from "+ago(DATA.snapshotAt||DATA.generatedAt)+" ago · "+ST.win+"-day window";
   var u=w.unidentified||{ing:0,lt:0};
   document.getElementById("foot").innerHTML="Source: GoHighLevel API v2 (read-only) · sms_analytics schema<br>"
-    +"Outside the 3 sequences: "+nf(u.ing)+" contacts · "+nf(u.lt)+" LT (other workflows or manual sends)";
+    +"Outside the sequences being measured: "+nf(u.ing)+" contacts · "+nf(u.lt)+" LT (other workflows or manual sends)";
 }
 // ---- AI Inside: primer componente de Performance. La IA analiza los mejores y peores mensajes.
 // La narrativa se sirve de 3 fuentes, en orden: (1) horneada en el snapshot (insights.ai, ABIERTA,
@@ -799,7 +1019,9 @@ function pills(){
    +'<span class="pill'+(ST.sort=="reply"?' on':'')+'" onclick="ST.sort=\'reply\';pills();t2()">Response rate</span>'
    +'<span class="pill'+(ST.sort=="lt"?' on':'')+'" onclick="ST.sort=\'lt\';pills();t2()">LT rate</span>'
    +'<span class="pill'+(ST.sort=="dnd"?' on':'')+'" onclick="ST.sort=\'dnd\';pills();t2()">Opt-out rate</span>';
-  document.getElementById("tabs").innerHTML=ORDER.map(function(k){
+  var ord=seqOrder();
+  if(ord.indexOf(ST.tab)<0) ST.tab=ord[0];   // la secuencia elegida puede haber dejado de medirse
+  document.getElementById("tabs").innerHTML=ord.map(function(k){
     return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';ST.branch=\'All\';pills();t2()">'+esc(seqName(k))+'</span>'}).join("");
   var w=W(),branches=[];if(w&&w.msgs&&w.msgs[ST.tab]){var seen=new Set();w.msgs[ST.tab].forEach(function(m){if(m.branch&&m.branch!=='-'){var b=m.branch.toUpperCase();if(!seen.has(b)){branches.push(b);seen.add(b)}}})};branches.sort();branches.push('All');
   document.getElementById("branches").innerHTML=branches.map(function(br){

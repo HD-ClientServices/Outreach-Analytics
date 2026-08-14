@@ -7,10 +7,12 @@ const WINDOW_DAYS = 30;
 const GEN_MODEL = "claude-sonnet-5";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// ---- Las 3 secuencias (dinámicas desde Supabase) ----
-// Se cargan desde DB en lugar de estar hardcodeadas.
-// Esto permite que cambios en los nombres de workflows en GHL se reflejen automáticamente.
-let WF: { key: string; label: string; re: RegExp; keywords: string[] }[] = [];
+// ---- Las secuencias medidas (dinámicas desde Supabase) ----
+// Una fila de sms_analytics.workflows = una secuencia que el dashboard mide.
+// `tags` son los tags que el workflow de GHL pone al entrar el contacto: son la
+// señal de clasificación, así que dar de alta una secuencia nueva desde la UI
+// (?action=workflow_add) alcanza para que empiece a medirse, sin tocar código.
+let WF: { key: string; label: string; re: RegExp; keywords: string[]; tags: string[]; ghlId: string | null }[] = [];
 
 // getConfig() y loadWorkflows() abrían UNA CONEXIÓN CADA UNO, en cada request,
 // antes de mirar siquiera qué acción se pidió. Contra el host directo cada
@@ -29,10 +31,18 @@ async function boot(): Promise<Record<string, string>> {
     for (const row of cf.rows) cfg[row.key] = row.value;
     let wfRows: any[] = [];
     try {
-      const w = await c.queryObject<{ key: string; label: string; keywords: string }>(
-        "select key,label,keywords from sms_analytics.workflows order by key");
+      const w = await c.queryObject<any>(
+        "select key,label,keywords,tags,ghl_id from sms_analytics.workflows order by sort, key");
       wfRows = w.rows || [];
-    } catch (_) { /* se cae al fallback de abajo */ }
+    } catch (_) {
+      // Base sin la migración de tags todavía: se lee lo que sí existe y los tags
+      // salen del mapa histórico, así que la clasificación no se cae en el medio.
+      try {
+        const w = await c.queryObject<any>(
+          "select key,label,keywords from sms_analytics.workflows order by key");
+        wfRows = w.rows || [];
+      } catch (_e) { /* se cae al fallback de abajo */ }
+    }
     return { cfg, wfRows };
   });
   applyWorkflows(out.wfRows);
@@ -40,30 +50,64 @@ async function boot(): Promise<Record<string, string>> {
   return out.cfg;
 }
 
+// El label es el nombre del workflow tal cual está en GHL, así que puede traer
+// paréntesis, signos de pregunta y demás: compilarlo crudo tiraba el boot entero.
+function labelRe(label: string): RegExp {
+  try { return new RegExp(label, "i"); }
+  catch (_) { return new RegExp(reEscape(String(label || "")), "i"); }
+}
+
 function applyWorkflows(rows: any[]) {
   if (rows && rows.length) {
     WF = rows.map((r: any) => ({
       key: r.key,
       label: r.label,
-      re: new RegExp(r.label, "i"),
+      re: labelRe(r.label),
       keywords: (r.keywords || "").split(",").filter((k: string) => k.trim()),
+      tags: splitTags(r.tags != null ? r.tags : (TAGS_FALLBACK[r.key] || "")),
+      ghlId: r.ghl_id || null,
     }));
     return;
   }
   WF = WF_FALLBACK;
 }
 
+function splitTags(s: string): string[] {
+  return String(s || "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+}
+
+// Mapa histórico tag -> secuencia. Solo se usa mientras una fila no tenga su
+// columna `tags` cargada; el mapa vivo es el de la tabla.
+const TAGS_FALLBACK: Record<string, string> = {
+  cold: "secuencia bfcb",
+  cc: "debtmd sequence,secuencia partner cc",
+  defdec: "sent from partner",
+};
+
 const WF_FALLBACK: typeof WF = [
-  { key: "cc", label: "Partner CC · DebtMD v2",
-    re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
-    keywords: ["cc", "credit", "submission", "anna", "debtmd"] },
   { key: "cold", label: "V2 · BULK FUP COLD BLAST",
     re: /improve.*payment|mca.*payment|quick call|open to.*call/i,
-    keywords: ["improve", "weekly", "payment", "mca", "call"] },
+    keywords: ["improve", "weekly", "payment", "mca", "call"],
+    tags: splitTags(TAGS_FALLBACK.cold), ghlId: "b985c65c-a0c3-4cdc-a737-7da93b77e933" },
+  { key: "cc", label: "Partner CC · DebtMD v2",
+    re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
+    keywords: ["cc", "credit", "submission", "anna", "debtmd"],
+    tags: splitTags(TAGS_FALLBACK.cc), ghlId: "e28be9d2-ce89-4b6f-b85a-494d08912e58" },
   { key: "defdec", label: "PARTNER · Defaults & Declined",
     re: /default|declined|qualify.*mca|just got.*file|file received/i,
-    keywords: ["default", "declined", "qualify", "file", "defdec"] },
+    keywords: ["default", "declined", "qualify", "file", "defdec"],
+    tags: splitTags(TAGS_FALLBACK.defdec), ghlId: "69533301-b2f3-445e-8ebe-3f2227ba8c8e" },
 ];
+
+// Un contacto puede tener tags de más de una secuencia (re-entradas, handoffs).
+// Se resuelve por el orden de WF (columna `sort`), que es el mismo orden en que
+// el dashboard las lista: la prioridad es visible, no un detalle escondido acá.
+const BRANCH_TAG_RE = /^rama\s*[a-z]$/;
+
+function seqFromTags(tags: string[]): string {
+  for (const w of WF) for (const t of w.tags) if (tags.includes(t)) return w.key;
+  return "none";
+}
 
 async function getSequenceAndBranchFromGHLTags(contactId: string, key: string): Promise<{sequence: string, branch: string}> {
   try {
@@ -71,13 +115,10 @@ async function getSequenceAndBranchFromGHLTags(contactId: string, key: string): 
     const data = await gget(url, key);
     const tags = (data?.contact?.tags || data?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
 
-    let sequence = "none";
-    if (tags.includes("secuencia bfcb")) sequence = "cold";
-    else if (tags.some((t: string) => t === "debtmd sequence" || t === "secuencia partner cc")) sequence = "cc";
-    else if (tags.includes("sent from partner")) sequence = "defdec";
+    const sequence = seqFromTags(tags);
 
     let branch = "-";
-    const branchTag = tags.find((t: string) => t.match(/^rama\s*[a-z]$/));
+    const branchTag = tags.find((t: string) => BRANCH_TAG_RE.test(t));
     if (branchTag) {
       branch = branchTag.split(/\s+/)[1] || "-";
     }
@@ -656,6 +697,10 @@ function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string
   return "-";
 }
 
+// Piso de envíos para las secuencias sin copies oficiales cargados. Es el mismo
+// número que anuncia el dashboard ("only messages with 5+ sends").
+const NEW_SEQ_MIN_SENDS = 5;
+
 async function build(cfg?: Record<string, string>) {
   return await withDb(async (c) => {
     const out: any = { generatedAt: new Date().toISOString(), windows: {} };
@@ -705,7 +750,12 @@ async function build(cfg?: Record<string, string>) {
       const agg: Record<string, Record<string, any>> = {};
       for (const r of msgs.rows) {
         const sk = skel(r.tmpl);
-        const text = OFF_TEXT[r.wf] && OFF_TEXT[r.wf][sk];
+        // Las 3 secuencias viejas se filtran contra sus copies oficiales (OFFICIAL),
+        // que es lo que saca el ruido de otros workflows. Una secuencia dada de alta
+        // desde la UI no tiene copies cargados: ahí el tag ES el filtro —lo que se
+        // mandó bajo ese tag es la secuencia— así que se usa el texto tal cual y el
+        // ruido se corta abajo por volumen (NEW_SEQ_MIN_SENDS).
+        const text = OFF_TEXT[r.wf] ? OFF_TEXT[r.wf][sk] : r.tmpl;
         if (!text) continue;
         const br = branchOf(r.br, r.wf, r.tmpl);
         const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
@@ -721,7 +771,11 @@ async function build(cfg?: Record<string, string>) {
         // así que ya NO usamos un tope por secuencia (escondía mensajes reales y
         // era una trampa si la cadencia crecía). Solo descartamos entradas SIN
         // posición canónica cuyo pos crudo sea absurdo (>50), como guard defensivo.
-        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) => e.canon || e.pos <= 50).map((e: any) => ({
+        // En las secuencias sin copies oficiales se suma el piso de envíos: sin él,
+        // cada variante suelta de un mensaje sería su propia fila.
+        const official = !!OFF_TEXT[wf];
+        msgsByWf[wf] = Object.values(agg[wf]).filter((e: any) =>
+          (e.canon || e.pos <= 50) && (official || e.sends >= NEW_SEQ_MIN_SENDS)).map((e: any) => ({
           tmpl: e.tmpl, pos: e.pos, branch: e.branch, sends: e.sends, replies: e.replies, lts: e.lts, dnds: e.dnds,
           replyRate: e.sends ? Math.round(1000 * e.replies / e.sends) / 10 : 0,
           ltRate: e.sends ? Math.round(10000 * e.lts / e.sends) / 100 : 0,
@@ -789,7 +843,7 @@ async function status() {
 function perfMd(snap: any, win: string): string {
   const w = snap && snap.windows && snap.windows[win];
   if (!w) return "# SMS PERFORMANCE\n(no data for window " + win + ")\n";
-  let md = "# SMS PERFORMANCE — 3 sequences (window: " + win + "d)\n";
+  let md = "# SMS PERFORMANCE — " + ((w.sequences || []).length) + " sequences (window: " + win + "d)\n";
   md += "meta:\n  source: GoHighLevel SMS analytics (read-only)\n";
   md += "  snapshot_at: " + (snap.snapshotAt || snap.generatedAt || "") + "\n";
   md += "  window_days: " + win + "\n";
@@ -799,7 +853,7 @@ function perfMd(snap: any, win: string): string {
   const seqs = (w.sequences || []).slice().sort((a: any, b: any) => (b.cr == null ? -1 : b.cr) - (a.cr == null ? -1 : a.cr));
   for (const s of seqs) md += "| " + s.key + " | " + s.label + " | " + (s.ing == null ? "-" : s.ing) + " | " + (s.lt == null ? "-" : s.lt) + " | " + (s.cr == null ? "-" : s.cr + "%") + " |\n";
   const u = w.unidentified || { ing: 0, lt: 0 };
-  md += "\nnote: outside these 3 sequences = " + u.ing + " contacts / " + u.lt + " LT (other workflows or manual sends).\n\n";
+  md += "\nnote: outside these sequences = " + u.ing + " contacts / " + u.lt + " LT (other workflows or manual sends).\n\n";
   const ins = w.insights;
   if (ins && ((ins.replicate || []).length || (ins.remove || []).length)) {
     md += "## perf.insights [item: what-to-replicate-and-kill] (min " + ins.minSends + " sends)\n";
@@ -1398,6 +1452,149 @@ async function ghlPipelines(cfg: Record<string, string>) {
       stages: (p.stages || []).map((s: any) => ({ id: s.id, name: s.name })),
     })).sort((a: any, b: any) => (b.closing ? 1 : 0) - (a.closing ? 1 : 0) || a.name.localeCompare(b.name)),
   };
+}
+
+// ---- Alta de secuencias desde la UI ----------------------------------------
+// El dashboard mide una secuencia cuando (1) existe su fila en `workflows` y (2)
+// el workflow de GHL le pone su tag al contacto al entrar. El tag lo elige el
+// sistema, no el usuario: la instrucción que se muestra en pantalla tiene que ser
+// literalmente el string que después busca el clasificador.
+
+const TAG_PREFIX = "secuencia ";
+// El slug se corta en palabras enteras: un tag a medio nombre ("secuencia partner
+// sequence mca") no se reconoce de un vistazo entre los cientos que hay en GHL.
+const TAG_SLUG_MAX = 40;
+const TAG_MAX = TAG_PREFIX.length + TAG_SLUG_MAX + 6;   // + margen del sufijo anti-colisión
+const BRANCH_TAGS = ["rama a", "rama b"];
+
+function deaccent(s: string): string {
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+// Los emojis de los nombres de workflow se van con el filtro a-z0-9; si no queda
+// nada utilizable, el nombre no sirve de slug y el llamador decide qué hacer.
+function tagFromName(name: string): string {
+  const words = deaccent(name).replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  let out = "";
+  for (const w of words) {
+    const next = out ? out + " " + w : w;
+    if (next.length > TAG_SLUG_MAX) break;
+    out = next;
+  }
+  return out;
+}
+
+function keyFromName(name: string): string {
+  const k = deaccent(name).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24).replace(/_+$/, "");
+  return k.length >= 2 ? k : "";
+}
+
+function uniqueOf(base: string, taken: Set<string>, sep: string, max: number): string {
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 99; n++) {
+    const suf = sep + n;
+    const c = (base.length + suf.length > max ? base.slice(0, max - suf.length) : base) + suf;
+    if (!taken.has(c)) return c;
+  }
+  return base + sep + "x";
+}
+
+async function readWorkflowRows() {
+  return await withDb(async (c) => {
+    const r = await c.queryObject<any>(
+      "select key,label,tags,ghl_id,sort from sms_analytics.workflows order by sort, key");
+    return r.rows || [];
+  });
+}
+
+// Lista los workflows de GHL marcando cuáles ya se están midiendo, y para los que
+// no, el tag exacto que habría que ponerles. El match es por id; el nombre solo se
+// usa para las 3 secuencias viejas, que se dieron de alta antes de guardar el id.
+async function ghlWorkflows(cfg: Record<string, string>) {
+  const d = await gget(BASE + "/workflows/?locationId=" + cfg.ghl_location, cfg.ghl_api_key);
+  const list = d?.workflows ?? [];
+  if (!list.length) return { error: "GHL no devolvió workflows (¿token o location?)" };
+
+  const rows = await readWorkflowRows();
+  const byId: Record<string, any> = {};
+  const byLabel: Record<string, any> = {};
+  const takenTags = new Set<string>();
+  for (const r of rows) {
+    if (r.ghl_id) byId[r.ghl_id] = r;
+    byLabel[deaccent(r.label).replace(/[^a-z0-9]+/g, "")] = r;
+    for (const t of splitTags(r.tags)) takenTags.add(t);
+  }
+
+  const out = list.map((w: any) => {
+    const hit = byId[w.id] || byLabel[deaccent(w.name).replace(/[^a-z0-9]+/g, "")] || null;
+    const slug = tagFromName(w.name);
+    return {
+      id: w.id,
+      name: w.name,
+      status: w.status || "",
+      updatedAt: w.updatedAt || w.createdAt || null,
+      tracked: !!hit,
+      key: hit ? hit.key : null,
+      tag: hit ? (splitTags(hit.tags)[0] || null)
+               : (slug ? uniqueOf(TAG_PREFIX + slug, takenTags, " ", TAG_MAX) : null),
+      branchTags: BRANCH_TAGS,
+    };
+  }).sort((a: any, b: any) =>
+    (b.tracked ? 1 : 0) - (a.tracked ? 1 : 0) ||
+    (a.status === "published" ? 0 : 1) - (b.status === "published" ? 0 : 1) ||
+    String(a.name).localeCompare(String(b.name)));
+
+  return { workflows: out, branchTags: BRANCH_TAGS };
+}
+
+// Da de alta la secuencia. Devuelve SIEMPRE el tag que quedó guardado (no el
+// sugerido): si otro alta se metió en el medio, la instrucción que ve el usuario
+// es la que de verdad va a clasificar.
+async function workflowAdd(cfg: Record<string, string>, body: any) {
+  const id = String(body?.id || "").trim();
+  const name = String(body?.name || "").trim();
+  if (!id || !name) return { error: "falta el workflow (id y name)" };
+
+  const rows = await readWorkflowRows();
+  const existing = rows.find((r: any) => r.ghl_id === id);
+  if (existing) {
+    return { already: true, key: existing.key, label: existing.label,
+      tag: splitTags(existing.tags)[0] || "", branchTags: BRANCH_TAGS };
+  }
+
+  const takenKeys = new Set<string>(rows.map((r: any) => r.key));
+  const takenTags = new Set<string>();
+  for (const r of rows) for (const t of splitTags(r.tags)) takenTags.add(t);
+
+  const baseKey = keyFromName(name);
+  const baseTag = tagFromName(name);
+  if (!baseKey || !baseTag) return { error: "el nombre del workflow no deja armar un identificador — renombralo en GHL" };
+  const key = uniqueOf(baseKey, takenKeys, "_", 24);
+  const tag = uniqueOf(TAG_PREFIX + baseTag, takenTags, " ", TAG_MAX);
+  if (!keyOk(key)) return { error: "no se pudo derivar una key válida de \"" + name + "\"" };
+
+  await withDb(async (c) => {
+    await c.queryArray(
+      `insert into sms_analytics.workflows(key,label,keywords,tags,ghl_id,sort)
+       values ($1,$2,'',$3,$4,(select coalesce(max(sort),100)+10 from sms_analytics.workflows))`,
+      [key, name, tag, id]);
+  });
+  BOOT = null; // que el próximo request relea WF con la secuencia nueva adentro
+  return { key, label: name, tag, branchTags: BRANCH_TAGS };
+}
+
+// Deja de medirla. No borra nada de cohort/msg_events: si se vuelve a dar de alta
+// el mismo workflow, el histórico ya medido reaparece tal cual.
+async function workflowRemove(body: any) {
+  const key = String(body?.key || "").trim();
+  if (!key) return { error: "falta la key" };
+  const n = await withDb(async (c) => {
+    const r = await c.queryObject<any>(
+      "delete from sms_analytics.workflows where key=$1 returning key", [key]);
+    return (r.rows || []).length;
+  });
+  BOOT = null;
+  return n ? { ok: true, key } : { error: "no existe la secuencia " + key };
 }
 
 async function personaSave(body: any) {
@@ -2364,6 +2561,15 @@ Deno.serve(async (req) => {
     if (action === "insight_ai") return json(await insightAi(cfg, url.searchParams.get("win") || "30"));
     if (action === "personas") return json(await personas());
     if (action === "ghl_pipelines") return json(await ghlPipelines(cfg));
+    if (action === "ghl_workflows") return json(await ghlWorkflows(cfg));
+    if (action === "workflow_add") {
+      const body = req.method === "POST" ? await req.json().catch(() => ({})) : Object.fromEntries(url.searchParams);
+      return json(await workflowAdd(cfg, body));
+    }
+    if (action === "workflow_remove") {
+      const body = req.method === "POST" ? await req.json().catch(() => ({})) : Object.fromEntries(url.searchParams);
+      return json(await workflowRemove(body));
+    }
     if (action === "persona_data") return json(await personaData(url.searchParams.get("key") || "mca"));
     if (action === "persona_status") return json(await personaStatus(url.searchParams.get("key") || "mca"));
     if (action === "persona_save") {
@@ -2403,6 +2609,6 @@ Deno.serve(async (req) => {
       });
       return json(r ? { ...r.data, snapshotAt: r.created_at } : { empty: true });
     }
-    return json({ error: "acciones: seed | refresh | markwon | context | generate | insight_ai | work | build | status | data" }, 400);
+    return json({ error: "acciones: seed | refresh | markwon | context | generate | insight_ai | work | build | status | data | ghl_workflows | workflow_add | workflow_remove" }, 400);
   } catch (e) { return json({ error: String(e) }, 500); }
 });
