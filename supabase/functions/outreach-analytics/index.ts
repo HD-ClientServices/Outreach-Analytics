@@ -245,12 +245,37 @@ const COLD_POS: Record<string, number> = {};
 // los ~44k históricos quedaron con cohort.branch='-' y sin este respaldo el
 // dashboard muestra 1,2,3 en vez de 1A,1B. Ver el cálculo de `br` en build().
 const COLD_BRANCH_BY_IDX = ["A", "A", "A", "A", "A", "A", "A", "A", "B", "B", "B", "B", "B", "B", "B", "B"];
-const COLD_BRANCH: Record<string, string> = {};
 (OFFICIAL.cold || []).forEach((m, i) => {
   const sk = skel(m);
   if (sk.length >= 4 && COLD_POS_BY_IDX[i] != null) COLD_POS[sk] = COLD_POS_BY_IDX[i];
-  if (sk.length >= 4 && COLD_BRANCH_BY_IDX[i] != null) COLD_BRANCH[sk] = COLD_BRANCH_BY_IDX[i];
 });
+
+// Comparar el esqueleto ENTERO era demasiado literal y dejaba fuera al mensaje
+// correcto por un carácter. El caso dominante: `tmplOf()` reemplaza el nombre del
+// contacto por {nombre}, así que un contacto SIN nombre recibe "Hi , we may be
+// able to…" y su esqueleto pierde la 'v' que el copy oficial sí tiene. Eran 684
+// contactos de un mismo mensaje. Lo mismo con las iniciales del medio ("Hi Ana E,")
+// y con "may" convertido en placeholder cuando el contacto se llama May.
+//
+// El núcleo empieza pasado el saludo+nombre —donde viven TODAS esas variaciones—
+// y toma 40 caracteres, largo de sobra para ser único: verificado que los 16
+// copies dan 16 núcleos sin colisión entre ramas, y que ninguna plantilla real de
+// la base matchea dos ramas a la vez.
+const COLD_CORE_FROM = 10, COLD_CORE_LEN = 40;
+const COLD_CORES: { core: string; br: string }[] = [];
+(OFFICIAL.cold || []).forEach((m, i) => {
+  const sk = skel(m);
+  const core = sk.slice(COLD_CORE_FROM, COLD_CORE_FROM + COLD_CORE_LEN);
+  if (core.length >= 20 && COLD_BRANCH_BY_IDX[i] != null) COLD_CORES.push({ core, br: COLD_BRANCH_BY_IDX[i] });
+});
+
+// Rama de UN mensaje de cold. Cada copy pertenece a una sola rama, así que el
+// texto basta. Devuelve "" si no es un mensaje reconocible de cold.
+function coldBranchOf(text: string): string {
+  const sk = skel(text);
+  for (const c of COLD_CORES) if (sk.includes(c.core)) return c.br;
+  return "";
+}
 
 // CANON_POS unifica las tres secuencias.
 const CANON_POS: Record<string, Record<string, number>> = { defdec: DEFDEC_POS, cc: {}, cold: COLD_POS };
@@ -670,10 +695,36 @@ function computeInsights(win: any): any {
 //     nada; solo los SMS 1 y 2 son exclusivos y por eso firstmsg ancla en ellos.
 //     A = Default · B = Declined.
 //   · cold — cada uno de sus mensajes pertenece a una sola rama, así que se
-//     resuelve en JS con COLD_BRANCH sobre first_tmpl (o sobre el mensaje mismo,
+//     resuelve con coldBranchOf() sobre el mensaje mismo (tabla de mensajes) y
+//     en SQL sobre todos los mensajes del contacto (desglose por secuencia).
 //     en la tabla de mensajes). Aquí sale '-' a propósito.
 // Usa $1 = ventana en días.
-const CBR_CTE = `firstmsg as (
+// skel() del esqueleto, en SQL: mismo reemplazo de {..}->'v' y borrado de todo lo
+// que no sea alfanumérico que hace la versión de JS.
+const SQL_SKEL = `regexp_replace(regexp_replace(lower(%s), '\\{+[^{}]*\\}+', 'v', 'g'), '[^a-z0-9]', '', 'g')`;
+const COLD_CORE_VALUES = COLD_CORES.map((c) => `('${c.core}','${c.br}')`).join(",");
+
+const CBR_CTE = `cold_core(core, br) as (values ${COLD_CORE_VALUES}),
+         tmpl_br as (
+           -- La rama se resuelve por PLANTILLA (55k filas), no por evento (578k):
+           -- el LIKE con comodín adelante es caro y así corre una sola vez.
+           select t.tmpl_key, min(m.br) as br
+           from (select tmpl_key, ${SQL_SKEL.replace("%s", "tmpl")} as sk
+                   from sms_analytics.templates) t
+           join cold_core m on t.sk like '%' || m.core || '%'
+           group by t.tmpl_key
+         ),
+         coldbr as (
+           -- La rama sale del PRIMER mensaje del contacto que sea reconocible, no
+           -- del primero a secas: si el opener salió con el nombre vacío o con una
+           -- inicial de más, el contacto igual se identifica por lo que siguió.
+           select distinct on (e.contact_id) e.contact_id, tb.br
+           from sms_analytics.msg_events e
+           join tmpl_br tb on tb.tmpl_key = e.tmpl_key
+           where e.wf = 'cold'
+           order by e.contact_id, e.pos asc, e.sent_at asc
+         ),
+         firstmsg as (
            select distinct on (e.contact_id) e.contact_id, t.tmpl
            from sms_analytics.msg_events e
            join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
@@ -686,6 +737,7 @@ const CBR_CTE = `firstmsg as (
            select c.contact_id, fm.tmpl as first_tmpl,
              case
                when coalesce(c.branch, '-') <> '-' then upper(c.branch)
+               when c.wf = 'cold' then coalesce(upper(cb.br), '-')
                when c.wf = 'defdec' then
                  case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
                       when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
@@ -694,6 +746,7 @@ const CBR_CTE = `firstmsg as (
              end as br
            from sms_analytics.cohort c
            left join firstmsg fm on fm.contact_id = c.contact_id
+           left join coldbr cb on cb.contact_id = c.contact_id
            where c.done and c.entered_at >= now() - ($1 || ' days')::interval
          )`;
 
@@ -702,7 +755,7 @@ const CBR_CTE = `firstmsg as (
 // primero del contacto en el desglose por secuencia.
 function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string {
   if (tagBr && tagBr !== "-") return tagBr;
-  if (wf === "cold" && tmpl) return COLD_BRANCH[skel(tmpl)] || "-";
+  if (wf === "cold" && tmpl) return coldBranchOf(tmpl) || "-";
   return "-";
 }
 
