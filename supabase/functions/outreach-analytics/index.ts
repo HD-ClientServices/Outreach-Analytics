@@ -394,17 +394,25 @@ async function refresh(cfg: Record<string, string>) {
   const since = lr - 12 * 3600000; // 12h de overlap para agarrar conversaciones actualizadas
   const contacts = new Map<string, string>();
   let cursor = String(since), pages = 0; const deadline = t0 + 110000;
+  // `caught` = se llegó al final de la cola de conversaciones. Distinguirlo de
+  // salir por tope es lo que evita saltearse un tramo: ver la marca de abajo.
+  let caught = false;
   while (pages < 800 && Date.now() < deadline) {
     const u = BASE + "/conversations/search?locationId=" + loc + "&limit=100&sortBy=last_message_date&sort=asc&startAfterDate=" + cursor;
     const d = await gget(u, key);
     const convs = d?.conversations ?? [];
-    if (!convs.length) break;
+    if (!convs.length) { caught = true; break; }
     for (const cv of convs) { const cid = cv.contactId; if (cid) contacts.set(cid, cv.contactName || cv.fullName || ""); }
     const lastLmd = convs[convs.length - 1]?.lastMessageDate ?? 0;
     let nc = String(lastLmd); if (nc === cursor) nc = String(lastLmd + 1);
     cursor = nc; pages++;
-    if (convs.length < 100) break;
+    if (convs.length < 100) { caught = true; break; }
   }
+  // Marcar t0 cuando la enumeración se cortó por tope (800 páginas o 110s) deja
+  // el tramo no recorrido SALTEADO PARA SIEMPRE: el próximo refresh arranca de t0
+  // y nadie vuelve a mirar el hueco. Si no se llegó al final, se guarda hasta
+  // donde de verdad se llegó, así el siguiente refresh retoma ahí.
+  const mark = caught ? t0 : Math.max(Number(cursor) || since, since);
   const rows = [...contacts.entries()];
   await withDb(async (c) => {
     for (let i = 0; i < rows.length; i += 500) {
@@ -419,10 +427,11 @@ async function refresh(cfg: Record<string, string>) {
     await c.queryObject(
       `delete from sms_analytics.cohort where entered_at is not null and entered_at < now() - ($1 || ' days')::interval`, [String(WINDOW_DAYS + 3)]);
     await c.queryArray(
-      `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(t0)]);
+      `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(mark)]);
     await c.queryObject(`update sms_analytics.run set started_at=now(), finished_at=null, note='refresh-inc' where id=1`);
   });
-  return { mode: "incremental", delta: rows.length, pages, elapsedMs: Date.now() - t0 };
+  return { mode: "incremental", delta: rows.length, pages, caughtUp: caught,
+    truncated: !caught, markedAt: mark, elapsedMs: Date.now() - t0 };
 }
 
 // ---- MARKWON: marca cohort.won desde oportunidades ganadas (numerador LT) ----
@@ -705,6 +714,19 @@ const NEW_SEQ_MIN_SENDS = 5;
 async function build(cfg?: Record<string, string>) {
   return await withDb(async (c) => {
     const out: any = { generatedAt: new Date().toISOString(), windows: {} };
+
+    // Frescura REAL de los datos, no del snapshot. Son dos cosas distintas y la
+    // diferencia es justo la que se puede volver peligrosa: `build` filtra las
+    // ventanas contra now(), así que reconstruir sin re-ingerir corre la ventana
+    // sobre días vacíos y desinfla los volúmenes sin que nada lo delate.
+    // `dataThrough` es el SMS más nuevo que hay en la base; `lastRefreshAt`,
+    // cuándo se fue a buscar a GHL por última vez. El dashboard estampa esto.
+    const fresh = await c.queryObject<{ data_through: string | null; last_refresh: string | null }>(
+      `select (select max(sent_at) from sms_analytics.msg_events) as data_through,
+              (select to_timestamp((value)::bigint/1000)
+                 from sms_analytics.config where key='last_refresh_ms') as last_refresh`);
+    out.dataThrough = fresh.rows[0]?.data_through ? new Date(fresh.rows[0].data_through).toISOString() : null;
+    out.lastRefreshAt = fresh.rows[0]?.last_refresh ? new Date(fresh.rows[0].last_refresh).toISOString() : null;
     for (const win of [7, 14, 30]) {
       const seqs = await c.queryObject<{ wf: string; ing: bigint; lt: bigint }>(
         `select wf, count(*)::bigint as ing, count(*) filter (where won)::bigint as lt
