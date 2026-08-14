@@ -61,6 +61,14 @@ tr.can{cursor:pointer}
 .pill:hover{border-color:rgba(0,0,0,.25);color:var(--foreground)}
 .pill.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 .nd{color:var(--muted-2);font-family:var(--font-mono)}
+/* Barra de filtros de Messages. Un <select> por control: la lista de secuencias
+   crece con cada alta y una fila de pills no escala. */
+.fbar{gap:18px;margin-bottom:16px}
+.fitem{display:flex;align-items:center;gap:8px;min-width:0}
+.fsel{font-family:var(--font-sans);font-size:13px;font-weight:500;color:var(--foreground);background:var(--background);border:1px solid var(--border);border-radius:999px;padding:7px 32px 7px 15px;cursor:pointer;outline:none;max-width:100%;text-overflow:ellipsis;appearance:none;-webkit-appearance:none;-moz-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 13px center;transition:border-color .15s}
+.fsel-wide{max-width:280px}
+.fsel:hover{border-color:rgba(0,0,0,.25)}
+.fsel:focus{border-color:var(--foreground)}
 .chip{font-size:10.5px;padding:2px 8px;border-radius:999px;background:var(--card);color:var(--muted-2);font-weight:500;margin-left:8px;white-space:nowrap}
 /* Ramas adivinadas por texto en vez de leídas del tag: sin esto se ven igual de
    sólidas que las medidas, y el problema se hereda sin que nadie lo note. */
@@ -934,9 +942,12 @@ function render(){
    + '<div class="card"><table><thead><tr><th style="width:300px">Sequence</th><th class="num" style="width:80px">LT</th>'
    + '<th class="num" style="width:160px">Contacts entered</th><th>Conversion rate to live transfer</th></tr></thead><tbody id="t1"></tbody></table></div></div>';
   H+='<div class="sec"><h2>Messages</h2><div class="h">Sends, responses, live transfers and opt-outs (DND) per message — with their rates. The three original sequences list their official copy, however few sends it has; the ones added from <b>+ Add a sequence</b> list whatever went out under their tag, from 5 sends up. In sequences with A/B branches the SMS&nbsp;# includes the branch (e.g. 1A, 5B): in <b>Defaults &amp; Declined</b>, <b>A</b> = Default · <b>B</b> = Declined; in <b>V2 · BULK FUP COLD BLAST</b>, <b>A</b> = Path A · <b>B</b> = ab testing.</div>'
-   + '<div class="controls" style="margin-bottom:14px"><div class="grp"><span class="lbl">Sort</span><div class="grp" id="sorts"></div></div></div>'
-   + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Sequence</span><div class="grp" id="tabs"></div></div></div>'
-   + '<div class="controls" style="margin-bottom:16px"><div class="grp"><span class="lbl">Branch</span><div class="grp" id="branches"></div></div></div>'
+   + '<div class="controls fbar"><div class="fitem"><span class="lbl">Sequence</span>'
+   + '<select class="fsel fsel-wide" id="selSeq" onchange="onSeq(this.value)"></select></div>'
+   + '<div class="fitem" id="fBranch"><span class="lbl">Branch</span>'
+   + '<select class="fsel" id="selBranch" onchange="onBranch(this.value)"></select></div>'
+   + '<div class="fitem"><span class="lbl">Sort</span>'
+   + '<select class="fsel" id="selSort" onchange="onSort(this.value)"></select></div></div>'
    + '<div class="card"><div style="overflow-x:auto"><table><thead><tr>'
    + '<th class="num" style="width:52px">SMS #</th><th style="min-width:260px">Message</th>'
    + '<th class="num">Sent</th><th class="num">Responses</th><th class="num">Live transfers</th><th class="num">Opt-out</th>'
@@ -1085,19 +1096,48 @@ function t1(){
   }).join("")||'<tr><td colspan="4" class="nd" style="padding:20px">No data.</td></tr>';
 }
 function toggleSeq(k){ EXP[k]=!EXP[k]; t1(); }
+/* Filtros de Messages. Eran pills: con 3 secuencias entraban, pero la lista sale
+   del registro y crece con cada alta desde "+ Add a sequence" — con 15 workflows
+   medidos la barra se volvia una pared de botones. Un <select> ocupa lo mismo con
+   3 opciones que con 30.
+
+   Branch tambien va de select aunque hoy tenga 2 ramas: mezclar selectores y
+   botones en la misma barra se lee como inconsistente, y las ramas no son siempre
+   dos (el tag acepta rama c, rama d...). La comparacion A/B se hace arriba, en la
+   tabla de secuencias que se despliega; aca se entra a UNA rama. */
+function opt(v, label, sel){
+  return '<option value="'+esc(v)+'"'+(sel?' selected':'')+'>'+esc(label)+'</option>';
+}
+function onSeq(v){ ST.tab=v; ST.branch='All'; pills(); t2(); }
+function onBranch(v){ ST.branch=v; t2(); }
+function onSort(v){ ST.sort=v; t2(); }
+
+var SORTS=[["pos","Position"],["reply","Response rate"],["lt","LT rate"],["dnd","Opt-out rate"]];
+
 function pills(){
-  document.getElementById("sorts").innerHTML=
-    '<span class="pill'+(ST.sort=="pos"?' on':'')+'" onclick="ST.sort=\'pos\';pills();t2()">Position</span>'
-   +'<span class="pill'+(ST.sort=="reply"?' on':'')+'" onclick="ST.sort=\'reply\';pills();t2()">Response rate</span>'
-   +'<span class="pill'+(ST.sort=="lt"?' on':'')+'" onclick="ST.sort=\'lt\';pills();t2()">LT rate</span>'
-   +'<span class="pill'+(ST.sort=="dnd"?' on':'')+'" onclick="ST.sort=\'dnd\';pills();t2()">Opt-out rate</span>';
   var ord=seqOrder();
   if(ord.indexOf(ST.tab)<0) ST.tab=ord[0];   // la secuencia elegida puede haber dejado de medirse
-  document.getElementById("tabs").innerHTML=ord.map(function(k){
-    return '<span class="pill'+(ST.tab==k?' on':'')+'" onclick="ST.tab=\''+k+'\';ST.branch=\'All\';pills();t2()">'+esc(seqName(k))+'</span>'}).join("");
-  var w=W(),branches=[];if(w&&w.msgs&&w.msgs[ST.tab]){var seen=new Set();w.msgs[ST.tab].forEach(function(m){if(m.branch&&m.branch!=='-'){var b=m.branch.toUpperCase();if(!seen.has(b)){branches.push(b);seen.add(b)}}})};branches.sort();branches.push('All');
-  document.getElementById("branches").innerHTML=branches.map(function(br){
-    return '<span class="pill'+(ST.branch===br?' on':'')+'" onclick="ST.branch=\''+br+'\';pills();t2()">'+esc(br)+'</span>'}).join("");
+  document.getElementById("selSeq").innerHTML=ord.map(function(k){
+    return opt(k, seqName(k), ST.tab==k)}).join("");
+
+  var w=W(), branches=[];
+  if(w&&w.msgs&&w.msgs[ST.tab]){
+    var seen={};
+    w.msgs[ST.tab].forEach(function(m){
+      if(m.branch&&m.branch!=='-'){var b=m.branch.toUpperCase(); if(!seen[b]){seen[b]=1;branches.push(b)}}});
+  }
+  branches.sort();
+  if(branches.indexOf(ST.branch)<0) ST.branch='All';
+  // Sin ramas que elegir el control no aporta nada: se esconde en vez de quedar
+  // como un desplegable muerto con una sola opcion.
+  var box=document.getElementById("fBranch");
+  if(box) box.style.display = branches.length ? "" : "none";
+  document.getElementById("selBranch").innerHTML=
+    opt('All','All branches',ST.branch==='All')
+    + branches.map(function(br){return opt(br,'Branch '+br,ST.branch===br)}).join("");
+
+  document.getElementById("selSort").innerHTML=SORTS.map(function(o){
+    return opt(o[0], o[1], ST.sort==o[0])}).join("");
 }
 function t2(){
   var w=W(), rows=((w.msgs||{})[ST.tab]||[]).slice();
