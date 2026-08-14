@@ -704,27 +704,37 @@ function computeInsights(win: any): any {
 const SQL_SKEL = `regexp_replace(regexp_replace(lower(%s), '\\{+[^{}]*\\}+', 'v', 'g'), '[^a-z0-9]', '', 'g')`;
 const COLD_CORE_VALUES = COLD_CORES.map((c) => `('${c.core}','${c.br}')`).join(",");
 
-const CBR_CTE = `cold_core(core, br) as (values ${COLD_CORE_VALUES}),
-         tmpl_br as (
-           -- La rama se resuelve por PLANTILLA (55k filas), no por evento (578k):
-           -- el LIKE con comodín adelante es caro y así corre una sola vez.
-           select t.tmpl_key, min(m.br) as br
-           from (select tmpl_key, ${SQL_SKEL.replace("%s", "tmpl")} as sk
-                   from sms_analytics.templates) t
-           join cold_core m on t.sk like '%' || m.core || '%'
-           group by t.tmpl_key
-         ),
-         coldbr as (
-           -- La rama sale del PRIMER mensaje del contacto que sea reconocible, no
-           -- del primero a secas: si el opener salió con el nombre vacío o con una
-           -- inicial de más, el contacto igual se identifica por lo que siguió.
-           select distinct on (e.contact_id) e.contact_id, tb.br
-           from sms_analytics.msg_events e
-           join tmpl_br tb on tb.tmpl_key = e.tmpl_key
-           where e.wf = 'cold'
-           order by e.contact_id, e.pos asc, e.sent_at asc
-         ),
-         firstmsg as (
+// La rama de cold por contacto NO depende de la ventana, pero el CTE corría una
+// vez por consulta y por ventana: 6 pasadas del LIKE sobre 55k plantillas y del
+// scan de 700k eventos. Con eso el build se pasaba de los 150s de la edge
+// function. Se calcula UNA vez en dos temporales (viven lo que dura la conexión
+// de build()) y las consultas por ventana solo hacen un join indexado.
+async function coldBranchTables(c: Client) {
+  await c.queryArray(`drop table if exists cold_tmpl_br`);
+  await c.queryArray(
+    `create temp table cold_tmpl_br as
+     with cold_core(core, br) as (values ${COLD_CORE_VALUES})
+     select t.tmpl_key, min(m.br) as br
+     from (select tmpl_key, ${SQL_SKEL.replace("%s", "tmpl")} as sk
+             from sms_analytics.templates) t
+     join cold_core m on t.sk like '%' || m.core || '%'
+     group by t.tmpl_key`);
+  await c.queryArray(`create index on cold_tmpl_br(tmpl_key)`);
+  // La rama sale del PRIMER mensaje del contacto que sea reconocible, no del
+  // primero a secas: si el opener salió con el nombre vacío o con una inicial de
+  // más, el contacto igual se identifica por lo que vino después.
+  await c.queryArray(`drop table if exists cold_contact_br`);
+  await c.queryArray(
+    `create temp table cold_contact_br as
+     select distinct on (e.contact_id) e.contact_id, tb.br
+     from sms_analytics.msg_events e
+     join cold_tmpl_br tb on tb.tmpl_key = e.tmpl_key
+     where e.wf = 'cold'
+     order by e.contact_id, e.pos asc, e.sent_at asc`);
+  await c.queryArray(`create index on cold_contact_br(contact_id)`);
+}
+
+const CBR_CTE = `firstmsg as (
            select distinct on (e.contact_id) e.contact_id, t.tmpl
            from sms_analytics.msg_events e
            join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
@@ -746,7 +756,7 @@ const CBR_CTE = `cold_core(core, br) as (values ${COLD_CORE_VALUES}),
              end as br
            from sms_analytics.cohort c
            left join firstmsg fm on fm.contact_id = c.contact_id
-           left join coldbr cb on cb.contact_id = c.contact_id
+           left join cold_contact_br cb on cb.contact_id = c.contact_id
            where c.done and c.entered_at >= now() - ($1 || ' days')::interval
          )`;
 
@@ -792,6 +802,8 @@ async function build(cfg?: Record<string, string>) {
         group by wf`);
     const byRecent: Record<string, { n: number; tagged: number }> = {};
     for (const r of recent.rows) byRecent[r.wf] = { n: Number(r.n), tagged: Number(r.tagged) };
+
+    await coldBranchTables(c);
 
     for (const win of [7, 14, 30]) {
       const seqs = await c.queryObject<{ wf: string; ing: bigint; lt: bigint; tagged: bigint }>(
