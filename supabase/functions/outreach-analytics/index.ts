@@ -392,7 +392,7 @@ async function seed(cfg: Record<string, string>) {
         `insert into sms_analytics.cohort(contact_id,name,won) values ${vals} on conflict (contact_id) do nothing`, args);
     }
     await c.queryObject(
-      `update sms_analytics.run set started_at=now(), seeded=$1, finished_at=null, note='seeded-conv' where id=1`, [rows.length]);
+      `update sms_analytics.run set started_at=now(), seeded=$1, finished_at=null, note='seeded-conv', phase_tries=0 where id=1`, [rows.length]);
     await c.queryArray(
       `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(t0)]);
   });
@@ -449,11 +449,19 @@ async function refresh(cfg: Record<string, string>) {
         `insert into sms_analytics.cohort(contact_id,name,won) values ${vals}
          on conflict (contact_id) do update set done=false, attempts=0`, args);
     }
+    // La poda se lleva también los eventos del contacto. Sin esto quedaban
+    // huérfanos para siempre: en octubre 2026 eran 1,66M de 2,06M filas, y el
+    // build las barría todas.
     await c.queryObject(
-      `delete from sms_analytics.cohort where entered_at is not null and entered_at < now() - ($1 || ' days')::interval`, [String(WINDOW_DAYS + 3)]);
+      `with gone as (
+         delete from sms_analytics.cohort
+          where entered_at is not null and entered_at < now() - ($1 || ' days')::interval
+          returning contact_id)
+       delete from sms_analytics.msg_events e using gone where e.contact_id = gone.contact_id`,
+      [String(WINDOW_DAYS + 3)]);
     await c.queryArray(
       `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(mark)]);
-    await c.queryObject(`update sms_analytics.run set started_at=now(), finished_at=null, note='refresh-inc' where id=1`);
+    await c.queryObject(`update sms_analytics.run set started_at=now(), finished_at=null, note='refresh-inc', phase_tries=0 where id=1`);
   });
   return { mode: "incremental", delta: rows.length, pages, caughtUp: caught,
     truncated: !caught, markedAt: mark, elapsedMs: Date.now() - t0 };
@@ -519,6 +527,8 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
   const key = cfg.ghl_api_key, loc = cfg.ghl_location;
   let processed = 0;
 
+  // Lotes de 60: cuando Supabase corta un request por tope de CPU (546) se pierde
+  // el lote en curso entero. El 20/10/2026 se cortaron 11 de ~25 con lotes de 120.
   while (Date.now() - t0 < budgetMs) {
     const batch = await withDb(async (c) => {
       const r = await c.queryObject<{ contact_id: string; name: string; won: boolean }>(
@@ -527,7 +537,7 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
            select contact_id from sms_analytics.cohort
            where not done and attempts < 3
            order by attempts, contact_id
-           limit 120
+           limit 60
            for update skip locked
          )
          returning contact_id, name, won`);
@@ -716,7 +726,10 @@ async function coldBranchTables(c: Client) {
      with cold_core(core, br) as (values ${COLD_CORE_VALUES})
      select t.tmpl_key, min(m.br) as br
      from (select tmpl_key, ${SQL_SKEL.replace("%s", "tmpl")} as sk
-             from sms_analytics.templates) t
+             from sms_analytics.templates
+            -- \`templates\` nunca se poda (104k en oct 2026) y el LIKE sobre todas
+            -- tardaba 36s. Solo importan las que aparecen en eventos de cold.
+            where tmpl_key in (select distinct tmpl_key from sms_analytics.msg_events where wf = 'cold')) t
      join cold_core m on t.sk like '%' || m.core || '%'
      group by t.tmpl_key`);
   await c.queryArray(`create index on cold_tmpl_br(tmpl_key)`);
@@ -734,31 +747,49 @@ async function coldBranchTables(c: Client) {
   await c.queryArray(`create index on cold_contact_br(contact_id)`);
 }
 
-const CBR_CTE = `firstmsg as (
-           select distinct on (e.contact_id) e.contact_id, t.tmpl
-           from sms_analytics.msg_events e
-           join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
-           where e.wf <> 'defdec'
-              or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
-              or t.tmpl ~* 'avoid colections' or t.tmpl ~* 'better option than an mca'
-           order by e.contact_id, e.pos asc, e.sent_at asc
-         ),
-         cbr as (
-           select c.contact_id, fm.tmpl as first_tmpl,
-             case
-               when coalesce(c.branch, '-') <> '-' then upper(c.branch)
-               when c.wf = 'cold' then coalesce(upper(cb.br), '-')
-               when c.wf = 'defdec' then
-                 case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
-                      when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
-                      else '-' end
-               else '-'
-             end as br
-           from sms_analytics.cohort c
-           left join firstmsg fm on fm.contact_id = c.contact_id
-           left join cold_contact_br cb on cb.contact_id = c.contact_id
-           where c.done and c.entered_at >= now() - ($1 || ' days')::interval
-         )`;
+// La rama de cada contacto se arma UNA vez por build, en la temporal contact_br,
+// sobre la ventana más ancha; las ventanas chicas la filtran por entered_at.
+// Antes esto era un CTE que corría en 2 consultas × 3 ventanas, y su `firstmsg`
+// barría msg_events ENTERO —incluidos los eventos de contactos ya podados—: con
+// 2M filas eran 33s por pasada y el build no entraba en los 150s (sept–oct 2026,
+// el dashboard quedó congelado en el 30/08). Ahora `firstmsg` solo mira los
+// contactos de la ventana.
+async function contactBranchTable(c: Client, days: number) {
+  const d = Math.max(1, Math.floor(days));
+  await c.queryArray(`drop table if exists contact_br`);
+  await c.queryArray(
+    `create temp table contact_br as
+     with win as (
+       select contact_id, wf, won, branch, entered_at
+       from sms_analytics.cohort
+       where done and entered_at >= now() - interval '${d} days'
+     ),
+     firstmsg as (
+       select distinct on (e.contact_id) e.contact_id, t.tmpl
+       from win w
+       join sms_analytics.msg_events e on e.contact_id = w.contact_id
+       join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
+       where e.wf <> 'defdec'
+          or t.tmpl ~* 'default situation' or t.tmpl ~* 'qualify for an mca'
+          or t.tmpl ~* 'avoid colections' or t.tmpl ~* 'better option than an mca'
+       order by e.contact_id, e.pos asc, e.sent_at asc
+     )
+     select w.contact_id, w.wf, w.won, w.entered_at, fm.tmpl as first_tmpl,
+       case
+         when coalesce(w.branch, '-') <> '-' then upper(w.branch)
+         when w.wf = 'cold' then coalesce(upper(cb.br), '-')
+         when w.wf = 'defdec' then
+           case when fm.tmpl ~* 'default situation' or fm.tmpl ~* 'avoid colections' then 'A'
+                when fm.tmpl ~* 'qualify for an mca' or fm.tmpl ~* 'better option than an mca' then 'B'
+                else '-' end
+         else '-'
+       end as br
+     from win w
+     left join firstmsg fm on fm.contact_id = w.contact_id
+     left join cold_contact_br cb on cb.contact_id = w.contact_id`);
+  await c.queryArray(`create index on contact_br(contact_id)`);
+  await c.queryArray(`analyze contact_br`);
+}
 
 // Rama de un MENSAJE, para la tabla de mensajes. Es una pregunta distinta de la
 // rama del CONTACTO: en cold cada copy pertenece a una sola rama por diseño, así
@@ -775,7 +806,7 @@ function msgBranchOf(tagBr: string | null, wf: string, tmpl: string | null): str
   return "-";
 }
 
-// Resuelve la rama del CONTACTO a partir de lo que devuelve CBR_CTE.
+// Resuelve la rama del CONTACTO a partir de lo que guarda contact_br.
 function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string {
   if (tagBr && tagBr !== "-") return tagBr;
   if (wf === "cold" && tmpl) return coldBranchOf(tmpl) || "-";
@@ -792,7 +823,12 @@ const NEW_SEQ_MIN_SENDS = 5;
 // secuencia decide si dibuja "No branch".
 const BRANCHLESS_MIN_SHARE = 0.01;
 
+// Si la parte SQL ya se comió esto, la capa IA se saltea: un snapshot sin
+// lectura IA es mejor que ningún snapshot.
+const BUILD_AI_CUTOFF_MS = 70000;
+
 async function build(cfg?: Record<string, string>) {
+  const t0 = Date.now();
   return await withDb(async (c) => {
     const out: any = { generatedAt: new Date().toISOString(), windows: {} };
 
@@ -822,6 +858,7 @@ async function build(cfg?: Record<string, string>) {
     for (const r of recent.rows) byRecent[r.wf] = { n: Number(r.n), tagged: Number(r.tagged) };
 
     await coldBranchTables(c);
+    await contactBranchTable(c, WINDOW_DAYS);
 
     for (const win of [7, 14, 30]) {
       const seqs = await c.queryObject<{ wf: string; ing: bigint; lt: bigint; tagged: bigint }>(
@@ -836,14 +873,12 @@ async function build(cfg?: Record<string, string>) {
       // Mismo universo de contactos que `seqs` (done + ventana), partido por rama,
       // para que las ramas sumen el total de su secuencia.
       const seqBr = await c.queryObject<{ wf: string; br: string; first_tmpl: string | null; ing: bigint; lt: bigint }>(
-        `with ${CBR_CTE}
-         select c.wf, cbr.br, cbr.first_tmpl,
+        `select cb.wf, cb.br, cb.first_tmpl,
                 count(*)::bigint as ing,
-                count(*) filter (where c.won)::bigint as lt
-         from sms_analytics.cohort c
-         join cbr on cbr.contact_id = c.contact_id
-         where c.done and c.entered_at >= now() - ($1 || ' days')::interval
-         group by c.wf, cbr.br, cbr.first_tmpl`, [String(win)]);
+                count(*) filter (where cb.won)::bigint as lt
+         from contact_br cb
+         where cb.entered_at >= now() - ($1 || ' days')::interval
+         group by cb.wf, cb.br, cb.first_tmpl`, [String(win)]);
       const byWfBr: Record<string, Record<string, { ing: number; lt: number }>> = {};
       for (const r of seqBr.rows) {
         const br = branchOf(r.br, r.wf, r.first_tmpl);
@@ -854,18 +889,16 @@ async function build(cfg?: Record<string, string>) {
       }
 
       const msgs = await c.queryObject<{ wf: string; br: string; tmpl: string; pos: number; sends: bigint; replies: bigint; lts: bigint; dnds: bigint }>(
-        `with ${CBR_CTE}
-         select e.wf, cbr.br, t.tmpl, min(e.pos)::int as pos,
+        `select e.wf, cb.br, t.tmpl, min(e.pos)::int as pos,
                 count(*)::bigint as sends,
                 count(*) filter (where e.got_reply)::bigint as replies,
-                count(*) filter (where e.led_to_lt and c.won)::bigint as lts,
+                count(*) filter (where e.led_to_lt and cb.won)::bigint as lts,
                 count(*) filter (where e.led_to_dnd)::bigint as dnds
-         from sms_analytics.msg_events e
+         from contact_br cb
+         join sms_analytics.msg_events e on e.contact_id = cb.contact_id
          join sms_analytics.templates t on t.tmpl_key = e.tmpl_key
-         join sms_analytics.cohort c on c.contact_id = e.contact_id
-         join cbr on cbr.contact_id = e.contact_id
-         where c.entered_at >= now() - ($1 || ' days')::interval
-         group by e.wf, cbr.br, t.tmpl`, [String(win)]);
+         where cb.entered_at >= now() - ($1 || ' days')::interval
+         group by e.wf, cb.br, t.tmpl`, [String(win)]);
 
       const agg: Record<string, Record<string, any>> = {};
       for (const r of msgs.rows) {
@@ -955,20 +988,28 @@ async function build(cfg?: Record<string, string>) {
     // Capa IA horneada en el snapshot: por cada ventana con mejores/peores, la IA escribe su
     // análisis y queda en insights.ai → el dashboard lo sirve ABIERTO (sin pedir clave a cada
     // visitante). Best-effort: sin key o si Anthropic falla/tarda, el snapshot se guarda igual.
+    // Las 3 llamadas van en paralelo: en serie eran hasta 3×45s, que solas ya
+    // pasaban el límite de la edge function.
     const akey = (cfg?.anthropic_api_key || "").trim();
-    if (akey) {
-      for (const win of [7, 14, 30]) {
+    if (akey && Date.now() - t0 < BUILD_AI_CUTOFF_MS) {
+      await Promise.all([7, 14, 30].map(async (win) => {
         const ins = out.windows[win] && out.windows[win].insights;
-        if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length))) continue;
+        if (!ins || ((!ins.replicate || !ins.replicate.length) && (!ins.remove || !ins.remove.length))) return;
         try {
           const a = await aiFindings(akey, String(win), ins.replicate || [], ins.remove || []);
           if (a && ((a.findings && a.findings.length) || a.narrative))
             ins.ai = { findings: a.findings || null, narrative: a.narrative || null, model: GEN_MODEL, at: new Date().toISOString() };
         } catch (_e) { /* best-effort: la IA no bloquea el build */ }
-      }
+      }));
     }
     await c.queryArray(`insert into sms_analytics.snapshots_v2(data) values ($1::jsonb)`, [JSON.stringify(out)]);
-    await c.queryObject(`update sms_analytics.run set finished_at=now(), note='built' where id=1`);
+    // Solo cierra la corrida si no queda nada por drenar: un build manual a mitad
+    // de un refresh no puede marcarla terminada, o work_tick nunca haría el build
+    // final con los datos completos.
+    await c.queryObject(
+      `update sms_analytics.run set finished_at=now(), note='built', phase_tries=0
+        where id=1 and not exists (
+          select 1 from sms_analytics.cohort where not done and attempts < 3)`);
     return out;
   });
 }
@@ -984,7 +1025,9 @@ async function status() {
               (select seeded from sms_analytics.run where id=1) as seeded,
               (select note from sms_analytics.run where id=1) as note,
               (select started_at from sms_analytics.run where id=1) as started_at,
-              (select finished_at from sms_analytics.run where id=1) as finished_at`);
+              (select finished_at from sms_analytics.run where id=1) as finished_at,
+              (select phase_at from sms_analytics.run where id=1) as phase_at,
+              (select phase_tries from sms_analytics.run where id=1) as phase_tries`);
     return r.rows[0];
   });
 }
@@ -2702,7 +2745,15 @@ Deno.serve(async (req) => {
   try {
     if (action === "seed") return json(await seed(cfg));
     if (action === "refresh") return json(await refresh(cfg));
-    if (action === "markwon") return json(await markwon(cfg));
+    if (action === "markwon") {
+      const r = await markwon(cfg);
+      // Si work_tick lo disparó como fase del pipeline, avanza a 'marked' para que
+      // el próximo tick haga el build. Un markwon suelto no toca la corrida.
+      await withDb((c) => c.queryArray(
+        `update sms_analytics.run set note='marked', phase_tries=0
+          where id=1 and finished_at is null and note='marking'`));
+      return json(r);
+    }
     if (action === "context") {
       const md = await context(url.searchParams.get("win") || "30", url.searchParams.get("persona") || "mca");
       return new Response(md, { status: 200, headers: { "content-type": "text/plain; charset=utf-8", "access-control-allow-origin": "*" } });
@@ -2747,10 +2798,11 @@ Deno.serve(async (req) => {
     if (action === "persona_build") return json(await personaBuild(cfg, url.searchParams.get("key") || "mca", url.searchParams.get("force") === "1"));
     if (action === "work") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
-      const r = await work(cfg, budget);
-      // Al drenar todo: marca won fresco y recien ahi construye (flujo semanal automatico).
-      if (r.remaining === 0) { await markwon(cfg); const b = await build(cfg); return json({ ...r, built: true, generatedAt: b.generatedAt }); }
-      return json(r);
+      // Ya NO construye acá. markwon (hasta ~115s) + build iban pegados al último
+      // lote (~100s) en el MISMO request y se pasaban de los 150s: se cortaba
+      // siempre, y como ya no quedaba nada pendiente nadie lo reintentaba. Ahora
+      // work_tick() los dispara como fases propias, cada una en su request.
+      return json(await work(cfg, budget));
     }
     if (action === "build") return json(await build(cfg));
     if (action === "status") return json(await status());

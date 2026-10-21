@@ -1235,7 +1235,10 @@ function startRefresh(){
         });
       }else{
         var dn=st.done||0,tt=st.total||0;
-        b.textContent=tt?("Processing "+dn.toLocaleString("en-US")+"/"+tt.toLocaleString("en-US")+"…"):"Refreshing…";
+        // Al terminar de drenar, work_tick corre markwon y build como fases propias.
+        b.textContent=st.note==="marking"?"Matching live transfers…"
+          :(st.note==="marked"||st.note==="building")?"Building snapshot…"
+          :tt?("Processing "+dn.toLocaleString("en-US")+"/"+tt.toLocaleString("en-US")+"…"):"Refreshing…";
         _pollT=setTimeout(poll,6000);
       }
     }).catch(function(){_pollT=setTimeout(poll,8000)});

@@ -114,6 +114,11 @@ El tag lo deriva `tagFromName()` del nombre del workflow (sin acentos ni emojis,
 palabras enteras) y se desambigua con un sufijo si ya existe. La prioridad, cuando un contacto
 trae tags de dos secuencias, es la columna `sort` — la misma que ordena la lista en pantalla.
 
+Si el workflow le **saca** el tag al terminar, el tag de fin también tiene que estar en
+`workflows.tags`: la clasificación lee los tags del contacto al procesarlo, y un contacto
+que ya terminó cae en `none` y pierde sus eventos. Pasaba con el Cold Blast (`ended fcb`)
+y con Partner CC (`debtmd sequence finished`).
+
 Dos consecuencias que conviene decir en voz alta:
 
 - **Los tags no son retroactivos.** Solo los contactos que entran *después* de configurarlos
@@ -307,13 +312,31 @@ Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
 
 | Job | Schedule | Qué hace |
 |---|---|---|
-| `outreach-analytics-backfill` (jobid 1) | `*/2 * * * *` | `work_tick()` → `?action=work`. **Solo drena.** |
+| `outreach-analytics-backfill` (jobid 1) | `* * * * *` | `work_tick()` → drena (`work`, lotes de 45s) y después cierra la corrida (`markwon` → `build`). |
 | `outreach-weekly-refresh` (jobid 2) | `0 11 * * 0` | `refresh_weekly()` → `?action=refresh`. **La ignición.** |
 
-Los dos son necesarios y hacen cosas distintas. `work_tick()` arranca contando
-`cohort where not done and attempts < 3` y hace *early-return* si da 0 — el
-`net.http_post` está después de esa guarda. O sea: **procesa lo que otro encoló,
-nunca inicia una extracción.** El que sale a buscar datos es el semanal.
+Los dos son necesarios y hacen cosas distintas. `work_tick()` **nunca inicia una
+extracción**: procesa lo que otro encoló. El que sale a buscar datos es el semanal.
+
+Cuando ya no quedan pendientes, `work_tick()` lleva la corrida hasta el snapshot
+en fases, cada una en su propio request (estado en `run.note`):
+
+```
+refresh-inc ─▶ marking ─▶ marked ─▶ building ─▶ built (+ finished_at)
+               markwon              build
+```
+
+Una fase en vuelo (`run.phase_at` < 3 min) no se pisa; si se corta, el tick
+siguiente la reintenta, hasta 4 veces (`run.phase_tries`). Se ve en `?action=status`.
+
+> ⚠️ **Lección de octubre 2026.** El dashboard quedó congelado en el 30/08 con la
+> ingesta funcionando. `markwon` + `build` corrían pegados al último lote de `work`,
+> en el mismo request, y no entraban en los 150s: se cortaba siempre, y como ya no
+> quedaba nada pendiente, nadie lo reintentaba. Además el build se había vuelto
+> lento por dos acumulaciones que nadie podaba: los eventos de contactos fuera de
+> la ventana (1,66M de 2,06M filas de `msg_events`, borrados el 21/10/2026; ahora
+> `refresh` los poda junto con el contacto) y las 104k plantillas que barría el LIKE
+> de las ramas de cold. Ver `migrations/20261021200100_work_tick_phases.sql`.
 
 > ⚠️ **Lección de agosto 2026.** El job semanal no existía: la línea que lo
 > agenda vivía comentada en el bloque de instrucciones de `schema_new_project.sql`
