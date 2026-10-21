@@ -807,9 +807,9 @@ function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string
   return "-";
 }
 
-// Piso de envíos para las secuencias sin copies oficiales cargados. NO aplica a
-// cc/cold/defdec: esas se filtran contra su copy oficial y no tienen piso, por
-// más pocos envíos que tenga un mensaje.
+// Piso de envíos para las secuencias sin copies oficiales cargados. En
+// cc/cold/defdec no hay piso por mensaje —se filtran contra su copy oficial—; solo
+// se usa para esconder un copy que le llegó a pocos contactos de la otra rama.
 const NEW_SEQ_MIN_SENDS = 5;
 
 // Peso mínimo para que la fila de un mensaje SIN rama identificada valga la pena
@@ -907,7 +907,9 @@ async function build(cfg?: Record<string, string>) {
         const br = msgBranchOf(r.br, r.wf, r.tmpl);
         const cmap = CANON_POS[r.wf]; const canonPos = cmap ? cmap[sk] : undefined;
         const g = (agg[r.wf] || (agg[r.wf] = {}));
-        const gk = sk + "¦" + br;
+        // Se agrupa por el esqueleto del copy OFICIAL, no del enviado: así las
+        // variantes (`alt`) de un paso suman en su fila en vez de abrir otra.
+        const gk = skel(text) + "¦" + br;
         const e = g[gk] || (g[gk] = { tmpl: text, pos: (canonPos != null ? canonPos : r.pos), branch: br, canon: canonPos != null, sends: 0, replies: 0, lts: 0, dnds: 0 });
         e.sends += Number(r.sends); e.replies += Number(r.replies); e.lts += Number(r.lts); e.dnds += Number(r.dnds);
         if (!e.canon && r.pos < e.pos) e.pos = r.pos;
@@ -938,8 +940,11 @@ async function build(cfg?: Record<string, string>) {
           if (e.branch && e.branch !== "-") conRama[sk] = true;
         }
         const material = (e: any) => {
-          if (e.branch && e.branch !== "-") return true;
           const sk = skel(e.tmpl);
+          // Un copy que le llegó a unos pocos contactos de la OTRA rama (re-entrada,
+          // envío manual) no es un paso de esa rama: "1A" con 2 envíos al lado de
+          // "1B" con 11.638. Si es la única fila del mensaje, se muestra igual.
+          if (e.branch && e.branch !== "-") return e.sends >= NEW_SEQ_MIN_SENDS || e.sends === totalBySk[sk];
           if (!conRama[sk]) return true;   // el mensaje no tiene ramas: esta fila ES el mensaje
           return e.sends >= BRANCHLESS_MIN_SHARE * (totalBySk[sk] || 1);
         };
