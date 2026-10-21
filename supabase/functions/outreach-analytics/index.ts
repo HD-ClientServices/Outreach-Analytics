@@ -145,60 +145,84 @@ const OPENERS = /\b(maria|camila|sara|santiago|james|anna|smith|lewis|miller|mar
 
 // Copies OFICIALES de cada secuencia. Solo se miden mensajes que pertenecen a la
 // secuencia del contacto; el resto (p.ej. bare-name de otra secuencia) NO se cuenta.
-const OFFICIAL: Record<string, string[]> = {
+//
+// Cada copy lleva su paso en el workflow (`pos`) y, en cold, su rama (`br`). `pos`
+// es la posición de DISEÑO, no el pos de envío crudo: ese cuenta TODOS los SMS
+// salientes de la conversación, así que con re-entradas u otros toques los últimos
+// pasos saltaban a 28/29. `alt` son variantes del mismo paso que salieron con otro
+// texto (la firma literal en vez de {opener}, un nombre de más); cuentan como él.
+//
+// GHL no expone las acciones de un workflow por API: esto se reconstruyó el
+// 21/10/2026 desde lo enviado en los últimos 30 días. Respecto de agosto:
+// - cold: la rama A es un guión nuevo, y la rama B tomó en los pasos 5 y 7 dos
+//   copies que antes eran de la A.
+// - cc: el workflow se rehízo; ahora son 16 pasos.
+// - defdec: la rama B ya no manda el opener ("just got your file…") y arranca en
+//   "better option than an MCA", así que todo se corrió un paso. La rama A quedó
+//   en ~50 contactos al mes.
+// Si un workflow cambia de copy, sus mensajes nuevos desaparecen de la tabla de
+// mensajes hasta que se cargan acá (el CR por secuencia no se entera: sale de tags).
+type Copy = { text: string; pos: number; br?: string; alt?: string[] };
+const OFFICIAL: Record<string, Copy[]> = {
   cc: [
-    "Hi {nombre}, this is {opener}. We received your submission regarding your {monto} in CC. When's a good time for a quick call?",
-    "Hi {nombre}, did you see my last message? We received your submission and would love to review your options",
-    "Do you have 5 minutes today, or would tomorrow work better?",
-    "Would tomorrow be a good time for a quick call? We can work around your schedule.",
-    "Hi {nombre}, just checking in. We saw you have about {monto} in CC. We'd love to see how we can help.",
-    "Hi {nombre}, following up on your request. We saw you have about {monto} in CC and wanted to connect.",
-    "Are you still interested in reviewing your options? Just reply whenever you can.",
-    "{nombre}, if now isn't a good time, let me know when I should reach out.",
-    "Hi {nombre}, I wanted to check if you're still looking for help with your {monto} in CC",
-    "If you have 5 minutes today, we can go over everything together.",
-    "{nombre}, would you rather talk this afternoon or tomorrow?",
-    "Hi {nombre}, this is my last follow-up for now. If you'd still like us to review your {monto} in CC, just reply",
-    "Are you still interested? If now isn't the best time, let me know what works better.",
-    "Thanks, {nombre}! Whenever you're ready, just send me a message and we'll be happy to help.",
+    { pos: 1, text: "Hi {nombre}, this is {opener}. We received your submission regarding your {monto} in CC. I'll call you now from this number. Please answer.",
+      alt: ["Hi {nombre}, this is Kate. We received your submission regarding your {monto} in CC. I'll call you now from this number. Please answer."] },
+    { pos: 2, text: "Hi {nombre}, I just called - did you get it? We got your submission and would love to review your options. Let me know a good time or just call me." },
+    { pos: 3, text: "{nombre}?" },
+    { pos: 4, text: "{nombre} do you have 5 minutes today, or would tomorrow work better?" },
+    { pos: 5, text: "Hi {nombre}, just checking in. We saw you have about {monto} in CC. We can help." },
+    { pos: 6, text: "Can I call you now? Or we can work around your schedule. Let me know." },
+    { pos: 7, text: "Hi {nombre}, just checking in. We saw you have about {monto} in CC. We'd love to see how we can help." },
+    { pos: 8, text: "We want to ensure you had an opportunity to receive the assistance you requested. Would you like to speak with someone?" },
+    { pos: 9, text: "Are you still interested in reviewing your options? Just reply whenever you can." },
+    { pos: 10, text: "{nombre}, if now isn't a good time, let me know when I should reach out." },
+    { pos: 11, text: "Hi {nombre}, I wanted to check if you're still looking for help with your {monto} in CC" },
+    { pos: 12, text: "If you have 5 minutes today, we can go over everything together." },
+    { pos: 13, text: "{nombre}, would you rather talk this afternoon or tomorrow?" },
+    { pos: 14, text: "Hi {nombre}, this is my last follow-up for now. If you'd still like us to review your {monto} in CC, just reply" },
+    { pos: 15, text: "Are you still interested? If now isn't the best time, let me know what works better." },
+    { pos: 16, text: "Final note, {nombre}! Whenever you're ready, just send me a message and we'll be happy to help." },
   ],
+  // cold tiene un Split dentro del MISMO workflow de GHL: dos guiones de 8 pasos en
+  // paralelo, así que comparten posición 1-8 y la letra de rama es lo que los separa.
   cold: [
-    // Rama A = "Path A" (guión original)
-    "Hi {nombre}, we may be able to improve your weekly payments. Open to a quick call about your MCAs? - {opener}",
-    "Hi {nombre}, my intention is simply to support you and help you feel less alone with your MCAs. - {opener}",
-    "Hi {nombre}, {opener} at Settlegroup, following up. We may be able to ease your payments quickly. Can I call you?",
-    "Hi {nombre}, we just helped a client improve terms on their MCAs payments. Can I give you a quick call now? - {opener}",
-    "{nombre}, we truly care about the people we work with and take their MCA situation seriously. Can I call you? - {opener}",
-    "Hi {nombre}, I've seen how heavy MCA payments can become without guidance. I want to help early. Just reply. - {opener}",
-    "{nombre}, I just want to make sure you have someone trustworthy to talk to. Just reply. - {opener}",
-    "Final note, {nombre}: if a brief call could help ease your MCA payments, just reply. I'm here to help. - {opener}",
-    // Rama B = "ab testing" (guión nuevo, agregado como split dentro del mismo workflow)
-    "Hi {nombre}, this is {opener} with Settlegroup. We're aware you're stacked in multiple MCA positions. Can I call you now?",
-    "Just trying to help you avoid stress on your positions. Can I call you now? - {opener}",
-    "We have a better option than another advance. Can I call you now?",
-    "Btw we just got a great result for an owner like you, stacked just like your positions. Quick call to share it?",
-    "We help owners simplify what they pay each week, up to 70% lower. Can I call you?",
-    "Hi {nombre}, {opener} at Settlegroup. Attorney-led, no upfront charge. Want to get ahead of this? Call me now.",
-    "Any thoughts, {nombre}? We know your positions and can restructure into one lower weekly amount.",
-    "Final note, {nombre}: if a brief call could ease your weekly amount, just reply. I'm here to help. - {opener}",
+    { pos: 1, br: "A", text: "Hi {nombre}, this is {opener} with Settlegroup. We noticed you're carrying more than one MCA position. Can I give you a call?" },
+    { pos: 2, br: "A", text: "Just want to help take some of the pressure off your current positions. Can I call you now? - {opener}" },
+    { pos: 3, br: "A", text: "We may have a better option than taking on another advance. Can I call you now?" },
+    { pos: 4, br: "A", text: "Btw we just helped an owner in a spot similar to yours get real relief. Quick call to share it?" },
+    { pos: 5, br: "A", text: "{nombre}, we genuinely care about the people we work with and take your MCA situation seriously. Can I call you? - {opener}" },
+    { pos: 6, br: "A", text: "Hi {nombre}, {opener} at Settlegroup. Our process is attorney-led with no upfront fees. Want to get ahead of this? Call me now." },
+    { pos: 7, br: "A", text: "{nombre}, I just want to make sure you have someone reliable to talk to about this. Just reply. - {opener}" },
+    { pos: 8, br: "A", text: "Last note, {nombre}: if a quick call could help lower your weekly amount, just reply. I'm here to help. - {opener}" },
+    { pos: 1, br: "B", text: "Hi {nombre}, this is {opener} with Settlegroup. We're aware you're stacked in multiple MCA positions. Can I call you now?" },
+    { pos: 2, br: "B", text: "Just trying to help you avoid stress on your positions. Can I call you now? - {opener}",
+      alt: ["Just trying to help you avoid stress on your positions. Can I call you now? - {nombre} {opener}"] },
+    { pos: 3, br: "B", text: "We have a better option than another advance. Can I call you now?" },
+    { pos: 4, br: "B", text: "Btw we just got a great result for an owner like you, stacked just like your positions. Quick call to share it?" },
+    { pos: 5, br: "B", text: "{nombre}, we truly care about the people we work with and take their MCA situation seriously. Can I call you? - {opener}" },
+    { pos: 6, br: "B", text: "Hi {nombre}, {opener} at Settlegroup. Attorney-led, no upfront charge. Want to get ahead of this? Call me now." },
+    { pos: 7, br: "B", text: "{nombre}, I just want to make sure you have someone trustworthy to talk to. Just reply. - {opener}" },
+    { pos: 8, br: "B", text: "Final note, {nombre}: if a brief call could ease your weekly amount, just reply. I'm here to help. - {opener}" },
   ],
+  // defdec: rama A = Default, rama B = Declined. Del paso 2 en adelante las dos
+  // comparten copy, así que la rama de un mensaje sale del contacto, no del texto.
+  // La numeración es la de la B, que es casi todo el volumen.
   defdec: [
-    "Hi {nombre}, just got your MCA file. We're aware of your default situation and we'd like to help you. Can I call you now? - {opener}",
-    "Hi {nombre}, just got your file. We were informed you didn't qualify for an MCA. We can help you with that. Can I call you now? - {opener}",
-    "Just trying to avoid colections... Can I call you now?",
-    "We have a better option than an MCA... Can I call you now?",
-    "Btw we just got a great result for a client like you. Quick call to share it?",
-    "We help owners simplify what they pay each week. Can I call you?",
-    "Hi {nombre}, {opener} at Settlegroup. We would really like to help you get ahead of this. Can I call you now?",
-    "Taking another MCA may not be the answer. Can I call you? - {opener}",
-    "GM {nombre}!, {opener} at Settlegroup. Another MCA may not fix this, but we may. Can I call you?",
-    "Any thoughts, {nombre}?",
-    "I'm honestly confused... My only goal is to share a solution with you. Can I call you now?",
-    "I'll try again tomorrow. Is that ok? Have a good one!",
-    "GM! Did you end up taking another MCA?",
-    "... Or any liens so far?",
-    "Can you give us a shot? Can I call you now?",
-    "Hi {nombre}, {opener} at Settlegroup again. We just got a great result for a client like you. Can I share it on a quick call?",
+    { pos: 1, text: "We have a better option than an MCA... Can I call you now?" },
+    { pos: 1, text: "Hi {nombre}, just got your MCA file. We're aware of your default situation and we'd like to help you. Can I call you now? - {opener}" },
+    { pos: 2, text: "Just trying to avoid colections... Can I call you now?" },
+    { pos: 2, text: "Btw we just got a great result for a client like you. Quick call to share it?" },
+    { pos: 3, text: "We help owners simplify what they pay each week. Can I call you?" },
+    { pos: 4, text: "Hi {nombre}, {opener} at Settlegroup. We would really like to help you get ahead of this. Can I call you now?" },
+    { pos: 5, text: "{nombre}?" },
+    { pos: 6, text: "Taking another MCA may not be the answer. Can I call you? - {opener}" },
+    { pos: 7, text: "GM {nombre}!, {opener} at Settlegroup. Another MCA may not fix this, but we may. Can I call you?" },
+    { pos: 8, text: "Any thoughts, {nombre}?" },
+    { pos: 9, text: "I'm honestly confused... My only goal is to share a solution with you. Can I call you now?" },
+    { pos: 10, text: "I'll try again tomorrow. Is that ok? Have a good one!" },
+    { pos: 11, text: "GM! Did you end up taking another MCA?" },
+    { pos: 12, text: "... Or any liens so far?" },
+    { pos: 13, text: "Can you give us a shot? Can I call you now?" },
   ],
 };
 // Esqueleto: toda variable ({nombre},{monto},{opener},{{...}}) -> 'v', se tira la puntuacion.
@@ -206,81 +230,51 @@ function skel(t: string): string {
   return (t || "").toLowerCase().replace(/\{+[^{}]*\}+/g, "v").replace(/[^a-z0-9]/g, "");
 }
 
+// esqueleto -> texto oficial y paso, por secuencia. El de "{nombre}?" es solo "v":
+// corto pero no ambiguo, porque se compara únicamente contra los envíos de su
+// propia secuencia.
 const OFF_TEXT: Record<string, Record<string, string>> = {};
-for (const k of Object.keys(OFFICIAL)) {
-  OFF_TEXT[k] = {};
-  for (const m of OFFICIAL[k]) {
-    const sk = skel(m);
-    if (sk.length >= 4) OFF_TEXT[k][sk] = m;
+const CANON_POS: Record<string, Record<string, number>> = {};
+for (const wf of Object.keys(OFFICIAL)) {
+  OFF_TEXT[wf] = {}; CANON_POS[wf] = {};
+  for (const m of OFFICIAL[wf]) {
+    for (const t of [m.text, ...(m.alt || [])]) {
+      const sk = skel(t);
+      if (!sk) continue;
+      OFF_TEXT[wf][sk] = m.text;
+      CANON_POS[wf][sk] = m.pos;
+    }
   }
 }
 
-// Posición canónica de cada mensaje oficial de Defaults & Declined (numeración
-// del workflow 1-15; el #6 "{nombre}?" está filtrado), indexada por su posición
-// en OFFICIAL.defdec. Se usa para etiquetar las ramas (1A/1B/…) consistente entre
-// ramas — NO el pos de envío crudo, que se desalinea entre Default y Declined.
-const DEFDEC_POS_BY_IDX = [1, 1, 2, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-const DEFDEC_POS: Record<string, number> = {};
-(OFFICIAL.defdec || []).forEach((m, i) => {
-  const sk = skel(m);
-  if (sk.length >= 4 && DEFDEC_POS_BY_IDX[i] != null) DEFDEC_POS[sk] = DEFDEC_POS_BY_IDX[i];
-});
-
-// cc es una cadencia lineal: el paso de diseño ES el índice en OFFICIAL (1-based).
-// Igual que defdec, usamos posición CANÓNICA y no el pos de envío crudo — ese pos
-// cuenta TODOS los SMS salientes de la conversación, así que cuando un contacto
-// acumula muchos (re-entradas, otros toques) los últimos mensajes de cc saltan a
-// 28/29 en vez de mostrar su paso real (…13, 14).
-
-// cold tiene un Split dentro del MISMO workflow de GHL: rama A = "Path A" (guión
-// original, índices 0-7 de OFFICIAL.cold) y rama B = "ab testing" (guión nuevo,
-// índices 8-15). Ambas ramas son 8 pasos en paralelo, así que comparten posición
-// canónica 1-8 — la letra de rama (ver cbr en build()) es lo que las distingue.
-const COLD_POS_BY_IDX = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8];
-const COLD_POS: Record<string, number> = {};
-// Cada mensaje de cold pertenece EXCLUSIVAMENTE a una rama (a diferencia de
-// defdec, donde las posiciones tardías son compartidas entre ramas), así que su
-// propio texto basta para saber de qué rama es. Esto NO reemplaza al tag "rama X"
-// de GHL —que sigue mandando— sino que cubre a los contactos que aún no lo tienen:
-// los ~44k históricos quedaron con cohort.branch='-' y sin este respaldo el
-// dashboard muestra 1,2,3 en vez de 1A,1B. Ver el cálculo de `br` en build().
-const COLD_BRANCH_BY_IDX = ["A", "A", "A", "A", "A", "A", "A", "A", "B", "B", "B", "B", "B", "B", "B", "B"];
-(OFFICIAL.cold || []).forEach((m, i) => {
-  const sk = skel(m);
-  if (sk.length >= 4 && COLD_POS_BY_IDX[i] != null) COLD_POS[sk] = COLD_POS_BY_IDX[i];
-});
-
+// Cada copy de cold pertenece EXCLUSIVAMENTE a una rama, así que su propio texto
+// basta para saber de qué rama es. Esto NO reemplaza al tag "rama X" de GHL —que
+// sigue mandando— sino que cubre a los contactos que no lo tienen. Ver el cálculo
+// de `br` en contact_br.
+//
 // Comparar el esqueleto ENTERO era demasiado literal y dejaba fuera al mensaje
 // correcto por un carácter. El caso dominante: `tmplOf()` reemplaza el nombre del
 // contacto por {nombre}, así que un contacto SIN nombre recibe "Hi , we may be
-// able to…" y su esqueleto pierde la 'v' que el copy oficial sí tiene. Eran 684
-// contactos de un mismo mensaje. Lo mismo con las iniciales del medio ("Hi Ana E,")
-// y con "may" convertido en placeholder cuando el contacto se llama May.
+// able to…" y su esqueleto pierde la 'v' que el copy oficial sí tiene. Lo mismo
+// con las iniciales del medio ("Hi Ana E,") y con "may" convertido en placeholder
+// cuando el contacto se llama May.
 //
 // El núcleo empieza pasado el saludo+nombre —donde viven TODAS esas variaciones—
-// y toma 40 caracteres, largo de sobra para ser único: verificado que los 16
-// copies dan 16 núcleos sin colisión entre ramas, y que ninguna plantilla real de
-// la base matchea dos ramas a la vez.
+// y toma 40 caracteres, largo de sobra para ser único entre las dos ramas.
 const COLD_CORE_FROM = 10, COLD_CORE_LEN = 40;
 const COLD_CORES: { core: string; br: string }[] = [];
-(OFFICIAL.cold || []).forEach((m, i) => {
-  const sk = skel(m);
-  const core = sk.slice(COLD_CORE_FROM, COLD_CORE_FROM + COLD_CORE_LEN);
-  if (core.length >= 20 && COLD_BRANCH_BY_IDX[i] != null) COLD_CORES.push({ core, br: COLD_BRANCH_BY_IDX[i] });
-});
+for (const m of OFFICIAL.cold) {
+  for (const t of [m.text, ...(m.alt || [])]) {
+    const core = skel(t).slice(COLD_CORE_FROM, COLD_CORE_FROM + COLD_CORE_LEN);
+    if (core.length >= 20 && m.br) COLD_CORES.push({ core, br: m.br });
+  }
+}
 
-// Rama de UN mensaje de cold. Cada copy pertenece a una sola rama, así que el
-// texto basta. Devuelve "" si no es un mensaje reconocible de cold.
+// Rama de UN mensaje de cold. Devuelve "" si no es un mensaje reconocible de cold.
 function coldBranchOf(text: string): string {
   const sk = skel(text);
   for (const c of COLD_CORES) if (sk.includes(c.core)) return c.br;
   return "";
-}
-
-// CANON_POS unifica las tres secuencias.
-const CANON_POS: Record<string, Record<string, number>> = { defdec: DEFDEC_POS, cc: {}, cold: COLD_POS };
-for (const wf of ["cc"]) {
-  (OFFICIAL[wf] || []).forEach((m, i) => { const sk = skel(m); if (sk.length >= 4) CANON_POS[wf][sk] = i + 1; });
 }
 
 function dbClient() { return new Client(Deno.env.get("SUPABASE_DB_URL")!); }

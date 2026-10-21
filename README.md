@@ -126,6 +126,10 @@ Dos consecuencias que conviene decir en voz alta:
 - **Las secuencias nuevas no tienen copies oficiales cargados** (`OFFICIAL` en `index.ts` es de
   las 3 viejas). Para ellas el filtro es el tag mismo: se muestra el texto tal cual salió,
   agrupado por esqueleto, con un piso de `NEW_SEQ_MIN_SENDS` envíos para cortar el ruido.
+- **Si un workflow viejo cambia de copy, hay que recargar `OFFICIAL`.** Sus mensajes nuevos
+  desaparecen de la tabla de mensajes hasta entonces (el CR por secuencia no se entera: sale de
+  los tags). GHL no expone las acciones de un workflow por API, así que se reconstruye desde lo
+  enviado. La última vez (21/10/2026) la tabla mostraba el 17% de los envíos de Partner CC.
 
 ---
 
@@ -238,7 +242,8 @@ rotuladas, no series superpuestas.
 
 > **Supabase bloquea HTML en todo `*.supabase.co`** (reescribe `text/html` → `text/plain` +
 > `nosniff`, anti-phishing). Aplica a functions **y** a Storage. Por eso el HTML se sirve desde
-> Netlify. `application/json` sí pasa intacto.
+> Railway (`server.js` + `Dockerfile`, en `outreach-analytics-production.up.railway.app`).
+> `application/json` sí pasa intacto.
 
 ---
 
@@ -355,10 +360,14 @@ es la edad del DATO, no la del snapshot ni la de tu sesión.
 
 Modelo de acceso (rediseñado 21/07/2026 — el token salió de la URL del dashboard):
 
-- **Ver el dashboard es abierto.** El link `outreach-analytics.netlify.app` (sin `?token=`)
-  carga métricas, persona e insights. La "privacidad" es el link mismo: quien lo tenga, entra.
-  Corolario honesto: las acciones de **lectura** (`data`/`status`/`context`) son accesibles por
-  cualquiera que conozca la URL (Netlify **o** la de la edge function). CORS = `*`. No hay login.
+> ⚠️ **Estado real (21/10/2026):** el handler ya no valida el token (`void token` en
+> `Deno.serve`), así que **todas** las acciones —también `seed`, que trunca la cohorte— están
+> abiertas para quien tenga la URL. Lo de abajo describe el diseño, no lo que corre hoy.
+
+- **Ver el dashboard es abierto.** El link `outreach-analytics-production.up.railway.app` (sin
+  `?token=`) carga métricas, persona e insights. La "privacidad" es el link mismo: quien lo tenga,
+  entra. Corolario honesto: las acciones de **lectura** (`data`/`status`/`context`) son accesibles
+  por cualquiera que conozca la URL (Railway **o** la de la edge function). CORS = `*`. No hay login.
 - **Las acciones de operador** (`refresh`/`seed`/`generate`/`insight_ai`/`work`/`build`/`markwon`)
   exigen `cfg.dash_token`. El dashboard lo **pide una vez por sesión** (prompt → `sessionStorage`)
   y lo manda por `?token=` **solo** en esas llamadas — nunca vive en la URL de la página ni en el
