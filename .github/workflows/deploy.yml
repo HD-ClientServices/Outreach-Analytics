@@ -22,4 +22,6 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_ID: voivhkugeepawdxoubgx
-        run: supabase functions deploy
+        # --yes: desde nov-2026 la CLI pide confirmación y, sin terminal, aborta
+        # sin desplegar nada ("Nothing was changed").
+        run: supabase functions deploy --yes
