@@ -336,7 +336,7 @@ tr.can{cursor:pointer}
   <div class="gform">
     <div class="gfield gf-wide">
       <label>Sequence goal</label>
-      <textarea id="g_goal" rows="2" placeholder="e.g. cold outreach to stacked contractors who are current but drowning"></textarea>
+      <textarea id="g_goal" rows="2" placeholder="e.g. MCA: cold outreach to stacked contractors · CC: follow up people who asked for help with their card balances"></textarea>
     </div>
     <div class="gfield">
       <label>Messages per sequence</label>
@@ -382,7 +382,10 @@ var EXP={}; // secuencias con el desglose por rama abierto, por key
 function showTab(v){
   document.querySelectorAll(".tab").forEach(function(b){b.classList.toggle("on",b.getAttribute("data-view")==v)});
   document.querySelectorAll(".view").forEach(function(el){el.hidden = el.id!="view-"+v});
-  if(v=="persona") pBoot();
+  // El selector de persona del Generator se llena desde ?action=personas. Sin
+  // esto, entrar directo al Generator solo ofrecía "MCA" y una secuencia de
+  // tarjeta se escribía con la persona equivocada.
+  if(v=="persona"||v=="generador") pBoot();
   window.scrollTo(0,0);
 }
 

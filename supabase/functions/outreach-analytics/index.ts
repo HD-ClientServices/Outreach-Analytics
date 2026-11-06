@@ -1281,6 +1281,66 @@ function checkCompliance(raw: string): { text: string; len: number; ok: boolean;
 }
 
 // ---- FASE 3: generador de secuencias SMS con IA (rendimiento + persona + voz de marca) ----
+//
+// Cada vertical tiene su propio guion. Antes el prompt era uno solo, escrito para
+// MCA ("stacked small-business owners", "weekly payments", "your positions"), y
+// elegir la persona de tarjeta no lo cambiaba: el modelo recibía una persona de
+// consumidor y la orden de hablarle como a un dueño de negocio, y la copy salía
+// con vocabulario de MCA. Ahora la persona elegida trae su rol, sus principios,
+// sus sustituciones y la secuencia propia en la que tiene que fijarse.
+//
+// Una vertical nueva sin entrada acá cae en MCA (el comportamiento de siempre) y
+// la respuesta lo avisa en `vertical.fallback`.
+type GenVertical = {
+  role: string; job: string; goal: string;
+  principles: string[]; subs: [string, string][];
+  focus: string[];       // keys de `workflows` que son de esta vertical
+  brandKeys: string[];   // context_docs a probar, en orden
+};
+const GEN_VERTICALS: Record<string, GenVertical> = {
+  mca: {
+    role: "You are an elite outbound SMS copywriter for a U.S. MCA (merchant cash advance) debt-restructuring firm.",
+    job: "Your job: write SMS sequences that make stacked small-business owners REPLY and accept a live transfer to a closer.",
+    goal: "cold outreach to stacked owners who are current but drowning",
+    principles: [
+      "- Ground every choice in the DATA + PERSONA. Lead with the winning angle: stacking + one affordable payment (up to 50-70% lower) + legal shield. They WANT to pay — never imply debt erasure or evasion.",
+      "- Mirror the persona's language and metrics (weekly/daily payments, % reduction). Pre-empt the #1 objection (distrust) early: attorney-led, no upfront, we understand your exact situation. Do NOT name or reference their 'lender(s)' — that word is banned; say 'your positions' or 'your current accounts' instead.",
+    ],
+    subs: SUBSTITUTIONS,
+    focus: ["cold", "defdec"],
+    brandKeys: ["brandvoice_mca", "brandvoice"],
+  },
+  // Tarjeta: consumidores, no negocios. El buyer (Century) solo paga la intro con
+  // 5+ min con el closer, soft check conseguido y $10.000+ en tarjetas, así que
+  // la secuencia tiene que traer gente que califique, no solo gente que conteste.
+  cc: {
+    role: "You are an elite outbound SMS copywriter for a U.S. consumer credit-card relief program (brand: Settlegroup, written as ONE word).",
+    job: "Your job: write SMS sequences that make individual consumers carrying credit-card balances PICK UP or REPLY and accept a live transfer to a specialist.",
+    goal: "follow up consumers who asked for help with their credit-card balances and get them on a call with a specialist",
+    principles: [
+      "- These are CONSUMERS, not business owners. Never say business, positions, advance, funding, weekly or daily. Their rhythm is monthly; talk about their cards, their balances, the interest and what they pay each month.",
+      "- They submitted a request for help (a partner site or our landing). Refer to THEIR request ('you asked about options for your cards') — never quote a balance back ('we saw you have about X'): naming the amount reads as surveillance and replies less in the data.",
+      "- The AI setter calls right after the first SMS, and many transfers happen on that call without any SMS reply. The first 1-2 messages must make them PICK UP: who is calling, that it is from this same number, and that it is about the request they made.",
+      "- The buyer only counts a transfer if the person has roughly 10k or more on credit cards and agrees to a soft review on the call. Pre-qualify gently (e.g. 'if your card balances are over 10k...') and you MAY say the review is soft and does not affect their score. Never promise any score improvement.",
+      "- Short, human questions beat long statements in this sequence (the bare first-name ping is its top message). Keep most follow-ups under ~90 characters and end them with one easy question.",
+      "- Pre-empt their doubts: they wonder if it's a scam or 'just another loan'. Truthful reassurance: no upfront fees, a real specialist, it's a review of their options, they decide.",
+    ],
+    subs: [
+      ["debt / debts", "card balances / what you owe on your cards"],
+      ["payment / payments / monthly payment", "what you pay each month / your monthly amount"],
+      ["lender / creditor", "your card companies / the banks"],
+      ["consolidate / consolidation", "one simpler plan"],
+      ["settle / settlement", "resolve / lower what you owe"],
+      ["credit score", "your score (only to say the soft review does not affect it)"],
+      ["loan", "(do not mention; we do not offer one)"],
+      ["free", "no upfront fees"],
+      ["guaranteed / pre-approved", "you may qualify"],
+    ],
+    focus: ["cc"],
+    brandKeys: ["brandvoice_cc"],
+  },
+};
+
 async function generate(cfg: Record<string, string>, body: any) {
   const akey = (cfg.anthropic_api_key || "").trim();
   if (!akey) return { error: "Missing 'anthropic_api_key' in the sms_analytics.config table. Add it in the Supabase Table Editor and retry." };
@@ -1289,34 +1349,38 @@ async function generate(cfg: Record<string, string>, body: any) {
   const win = String(brief.win || "30");
   const nMsgs = Math.min(Math.max(parseInt(brief.messages) || 6, 3), 12);
   const nVars = Math.min(Math.max(parseInt(brief.variants) || 2, 1), 3);
-  const goal = String(brief.goal || "cold outreach to stacked owners who are current but drowning").slice(0, 400);
+  const personaKey = keyOk(String(brief.persona || "")) ? String(brief.persona) : "mca";
+  const vert = GEN_VERTICALS[personaKey] || GEN_VERTICALS.mca;
+  const vertFallback = !GEN_VERTICALS[personaKey];
+  const goal = String(brief.goal || vert.goal).slice(0, 400);
   const audience = String(brief.audience || "use the persona as-is").slice(0, 400);
   const lang = String(brief.lang || "English").slice(0, 40);
-  const personaKey = keyOk(String(brief.persona || "")) ? String(brief.persona) : "mca";
+  const subs = vert.subs.map(([a, b]) => a + " -> " + b).join("; ");
 
   const inputs = await withDb(async (c) => {
     const q = await c.queryObject<{ data: any; created_at: string }>(
       "select data, created_at from sms_analytics.snapshots_v2 order by id desc limit 1");
     const snap = q.rows[0] ? { ...q.rows[0].data, snapshotAt: q.rows[0].created_at } : null;
-    const b = await c.queryObject<{ md: string }>("select md from sms_analytics.context_docs where key='brandvoice'");
-    return { perf: perfMd(snap, win), persona: await personaDocMd(c, personaKey), brand: (b.rows[0] && b.rows[0].md) || "(none)" };
+    const b = await c.queryObject<{ md: string }>(
+      "select md from sms_analytics.context_docs where key = any($1::text[]) order by array_position($1::text[], key) limit 1",
+      [vert.brandKeys]);
+    return { perf: perfMd(snap, win), persona: await personaDocMd(c, personaKey), brand: (b.rows[0] && b.rows[0].md) || "(none — use the role and principles above as the brand voice)" };
   });
 
   const sys = [
-    "You are an elite outbound SMS copywriter for a U.S. MCA (merchant cash advance) debt-restructuring firm.",
-    "Your job: write SMS sequences that make stacked small-business owners REPLY and accept a live transfer to a closer.",
+    vert.role,
+    vert.job,
     "You are given three inputs: PERFORMANCE DATA (which message structures empirically convert — reply/live-transfer/opt-out rates per message, plus best-response, best-LT and highest-opt-out signals), BUYER PERSONA (who closes and why, in their own words), and BRAND VOICE (tone, promise, allowed claims, compliance guardrails).",
     "Principles:",
-    "- Ground every choice in the DATA + PERSONA. Lead with the winning angle: stacking + one affordable payment (up to 50-70% lower) + legal shield. They WANT to pay — never imply debt erasure or evasion.",
-    "- Model structure on the best-response and best-LT messages; avoid the structure of the highest-opt-out message.",
-    "- Mirror the persona's language and metrics (weekly/daily payments, % reduction). Pre-empt the #1 objection (distrust) early: attorney-led, no upfront, we understand your exact situation. Do NOT name or reference their 'lender(s)' — that word is banned; say 'your positions' or 'your current accounts' instead.",
+    ...vert.principles,
+    "- Model structure on the best-response and best-LT messages of the FOCUS sequence(s); avoid the structure of the highest-opt-out message.",
     "- HARD LIMIT: every SMS MUST be 150 characters or fewer AS DELIVERED (a merge token counts as the short value it fills in — a first name / a rep name — not its literal length). Shorter is better.",
-    "- VARIABLES: the ONLY two allowed are {{contact.first_name}} (lead first name) and {{user.name}} (sender/rep name) — write them verbatim, with double curly braces. Do NOT use ANY other variable or merge field: no amount, dollar, company, city, day or time token. If you'd cite a dollar amount, phrase it generically ('your weekly payments', 'your positions') with NO number token. Any other {token} is auto-flagged as a failure.",
+    "- VARIABLES: the ONLY two allowed are {{contact.first_name}} (lead first name) and {{user.name}} (sender/rep name) — write them verbatim, with double curly braces. Do NOT use ANY other variable or merge field: no amount, dollar, company, city, day or time token. If you'd cite a dollar amount, phrase it generically with NO number token. Any other {token} is auto-flagged as a failure.",
     "- The PERFORMANCE examples below use internal placeholders like {nombre}, {opener}, {monto}. In YOUR output translate {nombre} -> {{contact.first_name}}, {opener} -> {{user.name}}, and DROP {monto} entirely (rewrite the line without any amount).",
     "- NEVER include opt-out, STOP, HELP, unsubscribe, or 'msg & data rates' language anywhere — not even on the first message. The client appends the legally-required opt-out separately, downstream. Any STOP/opt-out text is stripped automatically and counts as a failure.",
     "- Identify the sender by rep name ({{user.name}}) and stay truthful; always use 'up to' with any percentage. Do NOT add any compliance/opt-out footer.",
     "- BANNED WORDS (hardcoded; auto-flagged in code after you write — never use, in any form or casing): " + COMPLIANCE_BANNED + ".",
-    "- Prefer these safer substitutions instead: " + COMPLIANCE_SUBS + ".",
+    "- Prefer these safer substitutions instead: " + subs + ".",
     "- The PERSONA/BRAND context may itself contain banned words (it describes their 'lenders', 'debt', 'settlement'). NEVER copy those words into an SMS — always translate to the allowed vocabulary above.",
     "- Plain ASCII only: no emojis, no smart quotes or em-dashes, no ALL-CAPS words, at most one '!' or '?' in total, no link shorteners.",
     "- Produce testable VARIANTS with distinct hooks/angles so performance can compare them — not one final copy.",
@@ -1325,7 +1389,9 @@ async function generate(cfg: Record<string, string>, body: any) {
 
   const schema = '{"variants":[{"name":"short label","angle":"the core hook in one line","messages":[{"n":1,"day":0,"text":"SMS copy using ONLY {{contact.first_name}} and {{user.name}} as variables","why":"one-line rationale citing a data or persona signal"}]}],"notes":"what to A/B test between the variants"}';
 
-  const user = "PERFORMANCE DATA:\n" + inputs.perf + "\n\n===\n\nBUYER PERSONA:\n" + inputs.persona + "\n\n===\n\nBRAND VOICE:\n" + inputs.brand +
+  const focusNote = "FOCUS SEQUENCE(S) for this vertical: " + vert.focus.join(", ") +
+    ". Every other sequence in the data is a different audience: borrow only their structural lessons (length, questions, timing), never their angle or vocabulary.\n\n";
+  const user = "PERFORMANCE DATA:\n" + focusNote + inputs.perf + "\n\n===\n\nBUYER PERSONA:\n" + inputs.persona + "\n\n===\n\nBRAND VOICE:\n" + inputs.brand +
     "\n\n===\n\nBRIEF:\n- Goal: " + goal + "\n- Audience: " + audience + "\n- Messages per sequence: " + nMsgs + "\n- Variants: " + nVars + "\n- Language: " + lang +
     "\n\nReturn ONLY JSON in this exact shape:\n" + schema;
 
@@ -1367,7 +1433,7 @@ async function generate(cfg: Record<string, string>, body: any) {
   // no mejora NADA, cortamos (no tiene sentido seguir gastando API).
   const MAX_REPAIR_PASSES = 3;
   const rsys = "You rewrite outbound SMS so they pass hardcoded compliance rules. Keep the SAME intent. The ONLY variables allowed are {{contact.first_name}} and {{user.name}} — convert or remove any other token (e.g. an amount/{monto} token) and never invent new ones. Rules: <=150 chars as delivered; NO opt-out/STOP/HELP/'msg&data' text; plain ASCII only; no ALL-CAPS words; at most one ! or ? total; and NEVER use these banned words in any form: " +
-    COMPLIANCE_BANNED + ". Prefer: " + COMPLIANCE_SUBS + ". Respond with ONLY a JSON array echoing vi/mi: [{\"vi\":0,\"mi\":0,\"text\":\"...\"}].";
+    COMPLIANCE_BANNED + ". Prefer: " + subs + ". Respond with ONLY a JSON array echoing vi/mi: [{\"vi\":0,\"mi\":0,\"text\":\"...\"}].";
   let repairPasses = 0;
   while (parsed && flagged > 0 && repairPasses < MAX_REPAIR_PASSES) {
     repairPasses++;
@@ -1428,6 +1494,7 @@ async function generate(cfg: Record<string, string>, body: any) {
           : "El modelo devolvió texto que no es JSON válido (stop_reason=" + (stopReason || "?") + "). Ver el texto crudo abajo."));
   return { ok: true, model, elapsedMs: Date.now() - t0, stop_reason: stopReason,
     brief: { goal, audience, messages: nMsgs, variants: nVars, lang, win, persona: personaKey },
+    vertical: { key: vertFallback ? "mca" : personaKey, fallback: vertFallback, focus: vert.focus },
     compliance: { checked, flagged, removed, repaired, repairPasses, maxChars: SMS_MAX_CHARS,
       note: "Only messages that pass every hardcoded rule are offered — any that couldn't be repaired in " + MAX_REPAIR_PASSES + " passes are dropped, not shown. Even so, cold MCA/debt-restructuring outbound is a category formally prohibited by T-Mobile/Twilio/TCR: deliverability depends on number reputation, consent and rotation, not just the copy." },
     usage: j.usage || null, result: parsed, raw: parsed ? undefined : text, diag: diag };
