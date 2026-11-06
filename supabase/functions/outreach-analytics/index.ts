@@ -12,7 +12,40 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // `tags` son los tags que el workflow de GHL pone al entrar el contacto: son la
 // señal de clasificación, así que dar de alta una secuencia nueva desde la UI
 // (?action=workflow_add) alcanza para que empiece a medirse, sin tocar código.
-let WF: { key: string; label: string; re: RegExp; keywords: string[]; tags: string[]; ghlId: string | null }[] = [];
+// `location` es la location de GHL del workflow: un contacto solo se clasifica
+// contra los workflows de SU location.
+let WF: { key: string; label: string; re: RegExp; keywords: string[]; tags: string[]; ghlId: string | null; location: string }[] = [];
+
+// ---- Locations de GHL --------------------------------------------------------
+// GHL 1 es `ghl_location` + `ghl_api_key` (las claves de siempre); GHL n es
+// `ghl_location_n` + `ghl_api_key_n`. Cada una se lee con su propia key y con su
+// propio cupo de 100 req/10s. Una location sin key se lista (para poder avisarlo)
+// pero no se lee. Los nombres son "GHL 1" / "GHL 2": nunca "MCA", "Kate" ni "tarjeta".
+type Loc = { n: number; id: string; key: string; label: string };
+
+function locsOf(cfg: Record<string, string>): Loc[] {
+  const out: Loc[] = [];
+  const add = (n: number, idK: string, keyK: string) => {
+    const id = String(cfg[idK] || "").trim();
+    if (id && !out.some((l) => l.id === id)) out.push({ n, id, key: String(cfg[keyK] || "").trim(), label: "GHL " + n });
+  };
+  add(1, "ghl_location", "ghl_api_key");
+  for (const k of Object.keys(cfg)) {
+    const m = /^ghl_location_(\d+)$/.exec(k);
+    if (m && Number(m[1]) > 1) add(Number(m[1]), k, "ghl_api_key_" + m[1]);
+  }
+  return out.sort((a, b) => a.n - b.n);
+}
+// Las que se pueden leer.
+function activeLocs(cfg: Record<string, string>): Loc[] { return locsOf(cfg).filter((l) => l.key); }
+// La location "de siempre": la que tienen las filas anteriores a que hubiera dos.
+function primaryLoc(cfg: Record<string, string>): string { return String(cfg.ghl_location || "").trim(); }
+function locLabel(cfg: Record<string, string>, id: string): string {
+  const l = locsOf(cfg).find((x) => x.id === id);
+  return l ? l.label : (id || "?");
+}
+// Marca del último refresh de cada location. GHL 1 conserva el nombre viejo.
+function markKey(l: Loc): string { return l.n === 1 ? "last_refresh_ms" : "last_refresh_ms_" + l.n; }
 
 // getConfig() y loadWorkflows() abrían UNA CONEXIÓN CADA UNO, en cada request,
 // antes de mirar siquiera qué acción se pidió. Contra el host directo cada
@@ -29,23 +62,21 @@ async function boot(): Promise<Record<string, string>> {
       "select key,value from sms_analytics.config");
     const cfg: Record<string, string> = {};
     for (const row of cf.rows) cfg[row.key] = row.value;
+    // Base sin alguna migración todavía (la de tags, la de locations): se lee lo
+    // que sí existe —los tags salen del mapa histórico y la location es la de
+    // siempre—, así que la clasificación no se cae en el medio.
     let wfRows: any[] = [];
-    try {
-      const w = await c.queryObject<any>(
-        "select key,label,keywords,tags,ghl_id from sms_analytics.workflows order by sort, key");
-      wfRows = w.rows || [];
-    } catch (_) {
-      // Base sin la migración de tags todavía: se lee lo que sí existe y los tags
-      // salen del mapa histórico, así que la clasificación no se cae en el medio.
-      try {
-        const w = await c.queryObject<any>(
-          "select key,label,keywords from sms_analytics.workflows order by key");
-        wfRows = w.rows || [];
-      } catch (_e) { /* se cae al fallback de abajo */ }
+    for (const q of [
+      "select key,label,keywords,tags,ghl_id,location from sms_analytics.workflows order by sort, key",
+      "select key,label,keywords,tags,ghl_id from sms_analytics.workflows order by sort, key",
+      "select key,label,keywords from sms_analytics.workflows order by key",
+    ]) {
+      try { const w = await c.queryObject<any>(q); wfRows = w.rows || []; break; }
+      catch (_) { /* probar la consulta siguiente; si ninguna anda, fallback */ }
     }
     return { cfg, wfRows };
   });
-  applyWorkflows(out.wfRows);
+  applyWorkflows(out.wfRows, primaryLoc(out.cfg));
   BOOT = { cfg: out.cfg, at: Date.now() };
   return out.cfg;
 }
@@ -57,7 +88,7 @@ function labelRe(label: string): RegExp {
   catch (_) { return new RegExp(reEscape(String(label || "")), "i"); }
 }
 
-function applyWorkflows(rows: any[]) {
+function applyWorkflows(rows: any[], primary: string) {
   if (rows && rows.length) {
     WF = rows.map((r: any) => ({
       key: r.key,
@@ -66,10 +97,11 @@ function applyWorkflows(rows: any[]) {
       keywords: (r.keywords || "").split(",").filter((k: string) => k.trim()),
       tags: splitTags(r.tags != null ? r.tags : (TAGS_FALLBACK[r.key] || "")),
       ghlId: r.ghl_id || null,
+      location: r.location || primary,
     }));
     return;
   }
-  WF = WF_FALLBACK;
+  WF = WF_FALLBACK.map((w) => ({ ...w, location: primary }));
 }
 
 function splitTags(s: string): string[] {
@@ -84,49 +116,64 @@ const TAGS_FALLBACK: Record<string, string> = {
   defdec: "sent from partner",
 };
 
+// `location` vacía: applyWorkflows() le pone la de siempre (GHL 1), que es donde
+// vivían las 3 secuencias viejas.
 const WF_FALLBACK: typeof WF = [
   { key: "cold", label: "V2 · BULK FUP COLD BLAST",
     re: /improve.*payment|mca.*payment|quick call|open to.*call/i,
     keywords: ["improve", "weekly", "payment", "mca", "call"],
-    tags: splitTags(TAGS_FALLBACK.cold), ghlId: "b985c65c-a0c3-4cdc-a737-7da93b77e933" },
+    tags: splitTags(TAGS_FALLBACK.cold), ghlId: "b985c65c-a0c3-4cdc-a737-7da93b77e933", location: "" },
   { key: "cc", label: "Partner CC · DebtMD v2",
     re: /\bcc\b|credit card|submission.*cc|this is (anna|maria|camila|sara)/i,
     keywords: ["cc", "credit", "submission", "anna", "debtmd"],
-    tags: splitTags(TAGS_FALLBACK.cc), ghlId: "e28be9d2-ce89-4b6f-b85a-494d08912e58" },
+    tags: splitTags(TAGS_FALLBACK.cc), ghlId: "e28be9d2-ce89-4b6f-b85a-494d08912e58", location: "" },
   { key: "defdec", label: "PARTNER · Defaults & Declined",
     re: /default|declined|qualify.*mca|just got.*file|file received/i,
     keywords: ["default", "declined", "qualify", "file", "defdec"],
-    tags: splitTags(TAGS_FALLBACK.defdec), ghlId: "69533301-b2f3-445e-8ebe-3f2227ba8c8e" },
+    tags: splitTags(TAGS_FALLBACK.defdec), ghlId: "69533301-b2f3-445e-8ebe-3f2227ba8c8e", location: "" },
 ];
 
 // Un contacto puede tener tags de más de una secuencia (re-entradas, handoffs).
 // Se resuelve por el orden de WF (columna `sort`), que es el mismo orden en que
 // el dashboard las lista: la prioridad es visible, no un detalle escondido acá.
+//
+// Solo compiten los workflows de la location del contacto: los tags son de cada
+// location, y GHL 1 y GHL 2 tienen los dos un `secuencia partner cc`.
 const BRANCH_TAG_RE = /^rama\s*[a-z]$/;
 
-function seqFromTags(tags: string[]): string {
-  for (const w of WF) for (const t of w.tags) if (tags.includes(t)) return w.key;
+function seqFromTags(tags: string[], location: string): string {
+  for (const w of WF) {
+    if (w.location !== location) continue;
+    for (const t of w.tags) if (tags.includes(t)) return w.key;
+  }
   return "none";
 }
 
-async function getSequenceAndBranchFromGHLTags(contactId: string, key: string): Promise<{sequence: string, branch: string}> {
-  try {
-    const url = BASE + "/contacts/" + contactId;
-    const data = await gget(url, key);
-    const tags = (data?.contact?.tags || data?.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
+// Teléfono -> clave para deduplicar entre locations. Los 10 últimos dígitos (US),
+// así "+1 (555) 010-0000" y "5550100000" son la misma persona. '' = sin teléfono,
+// distinto de null (= fila procesada antes de que existiera la columna).
+async function phoneKeyOf(phone: unknown): Promise<string> {
+  const d = String(phone || "").replace(/\D/g, "").slice(-10);
+  if (d.length < 10) return "";
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("tel:" + d));
+  return [...new Uint8Array(h)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
-    const sequence = seqFromTags(tags);
-
-    let branch = "-";
-    const branchTag = tags.find((t: string) => BRANCH_TAG_RE.test(t));
-    if (branchTag) {
-      branch = branchTag.split(/\s+/)[1] || "-";
-    }
-
-    return { sequence, branch };
-  } catch (_) {
-    return { sequence: "none", branch: "-" };
-  }
+// Tags y teléfono del contacto. null si GHL no contestó: antes eso devolvía
+// 'none' y el contacto se daba por procesado sin secuencia ni eventos; ahora
+// queda pendiente y el próximo lote lo reintenta (hasta 3 veces).
+// Un contacto que ya no existe (404) se clasifica como siempre: sin tags, 'none'.
+async function contactInfo(contactId: string, loc: Loc): Promise<{ sequence: string; branch: string; phoneKey: string } | null> {
+  const r = await gfetch(BASE + "/contacts/" + contactId, loc.key);
+  if (!r.data) return [400, 404, 422].includes(r.status) ? { sequence: "none", branch: "-", phoneKey: "" } : null;
+  const ct = r.data.contact || r.data;
+  const tags = (ct.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
+  const branchTag = tags.find((t: string) => BRANCH_TAG_RE.test(t));
+  return {
+    sequence: seqFromTags(tags, loc.id),
+    branch: branchTag ? (branchTag.split(/\s+/)[1] || "-") : "-",
+    phoneKey: await phoneKeyOf(ct.phone),
+  };
 }
 
 
@@ -282,16 +329,44 @@ async function withDb<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const c = dbClient(); await c.connect();
   try { return await fn(c); } finally { await c.end(); }
 }
-async function gget(url: string, key: string, tries = 5): Promise<any> {
+// Cupo de GHL: 100 requests cada 10s POR LOCATION (cada una tiene su key). Antes
+// no había freno: la concurrencia del pool pasaba el cupo, GHL contestaba 429 y
+// gget reintentaba a ciegas. Con dos locations eso ya no alcanza: el cupo es de
+// cada una, así que se cuenta por key, en una ventana deslizante, y se deja
+// margen porque el token de GHL 1 lo comparte el producto Intro. Vale dentro de
+// esta invocación; las invocaciones del cron no se pisan (lotes de 45s por minuto).
+const GHL_WINDOW_MS = 10000;
+const GHL_MAX_PER_WINDOW = 90;
+const GHL_HITS = new Map<string, number[]>();
+
+async function ghlSlot(key: string) {
+  for (;;) {
+    const now = Date.now();
+    const hits = GHL_HITS.get(key) || [];
+    while (hits.length && now - hits[0] >= GHL_WINDOW_MS) hits.shift();
+    if (hits.length < GHL_MAX_PER_WINDOW) { hits.push(now); GHL_HITS.set(key, hits); return; }
+    await sleep(GHL_WINDOW_MS - (now - hits[0]) + 10);
+  }
+}
+
+// `status` distingue "GHL no contestó" (0/429/5xx: reintentar más tarde) de "no
+// existe" (400/404/422: el contacto se borró), que gget solo no puede decir.
+async function gfetch(url: string, key: string, tries = 5): Promise<{ status: number; data: any }> {
+  let status = 0;
   for (let i = 0; i < tries; i++) {
     try {
+      await ghlSlot(key);
       const r = await fetch(url, { headers: { Authorization: "Bearer " + key, Version: VER } });
-      if (r.status === 200) return await r.json();
+      status = r.status;
+      if (r.status === 200) return { status, data: await r.json() };
       if ([429, 403, 502, 503].includes(r.status)) { await sleep(1200 + i * 1200); continue; }
-      return null;
+      return { status, data: null };
     } catch (_) { await sleep(800 + i * 800); }
   }
-  return null;
+  return { status, data: null };
+}
+async function gget(url: string, key: string, tries = 5): Promise<any> {
+  return (await gfetch(url, key, tries)).data;
 }
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const res: R[] = new Array(items.length); let idx = 0;
@@ -321,32 +396,32 @@ function json(o: any, status = 200) {
   return new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
 }
 
-// ---- SEED: cohorte = TODOS los contactos texteados en la ventana ------------
-// Denominador por MENSAJES (no por oportunidad): enumera las conversaciones
-// creadas en la ventana (startDate/endDate filtran por dateAdded ~= inicio de
-// secuencia) en PARALELO por franjas de 1 dia, cada franja con su cursor
-// asc + startAfterDate. VERIFICADO: el param 'id' rompe la query, NO usarlo;
-// 'sort=desc' con startAfterDate devuelve lo ya visto. El 'won' (LT) se marca
-// aparte con ?action=markwon. work() atribuye wf por 1er SMS.
-async function seed(cfg: Record<string, string>) {
-  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  const t0 = Date.now();
+// ---- Enumeración de conversaciones, por location ----------------------------
+// VERIFICADO: el param 'id' rompe la query, NO usarlo; 'sort=desc' con
+// startAfterDate devuelve lo ya visto. Cada location se recorre con su key y en
+// paralelo con las demás: el cupo de 100 req/10s es de cada una, así que dos
+// locations tardan lo mismo que una. El tope es el de siempre —una invocación
+// muere a los 150s— y por eso la enumeración corta a los 105s pase lo que pase.
+const ENUM_DEADLINE_MS = 105000;
+
+// Todas las conversaciones creadas en la ventana, en PARALELO por franjas de 1 día
+// (startDate/endDate filtran por dateAdded ~= inicio de secuencia), cada franja
+// con su cursor asc + startAfterDate.
+async function enumWindow(loc: Loc, t0: number, deadline: number) {
   const day = 86400000;
   const nDays = WINDOW_DAYS + 2; // margen sobre la ventana de 30d
   const chunks: { s: number; e: number }[] = [];
   for (let i = 0; i < nDays; i++) chunks.push({ s: t0 - (i + 1) * day, e: t0 - i * day });
-  const deadline = t0 + 118000;
   let timedOut = false;
-
   // Cada franja se enumera secuencial (cursor), pero las franjas van en paralelo.
   const maps = await pool(chunks, 8, async (ch) => {
     const local = new Map<string, string>();
     let cursor = "", pages = 0;
     while (pages < 400) {
       if (Date.now() > deadline) { timedOut = true; break; }
-      let u = BASE + "/conversations/search?locationId=" + loc + "&limit=100&startDate=" + ch.s + "&endDate=" + ch.e + "&sortBy=last_message_date&sort=asc";
+      let u = BASE + "/conversations/search?locationId=" + loc.id + "&limit=100&startDate=" + ch.s + "&endDate=" + ch.e + "&sortBy=last_message_date&sort=asc";
       if (cursor) u += "&startAfterDate=" + cursor;
-      const d = await gget(u, key);
+      const d = await gget(u, loc.key);
       const convs = d?.conversations ?? [];
       if (!convs.length) break;
       for (const cv of convs) { const cid = cv.contactId; if (cid && !local.has(cid)) local.set(cid, cv.contactName || cv.fullName || ""); }
@@ -359,67 +434,22 @@ async function seed(cfg: Record<string, string>) {
   });
   const contacts = new Map<string, string>();
   for (const m of maps) for (const [cid, name] of m) if (!contacts.has(cid)) contacts.set(cid, name);
-  if (timedOut) return { error: "enum timeout", collected: contacts.size };
-
-  // GUARD anti-wipe: si GHL rate-limitea (429), la enumeracion junta 0/pocos y
-  // NO hay que truncar la cohorte buena. 0 nunca es legitimo aca (~38k). Si la
-  // nueva cae por debajo del 50% de la actual, se aborta SIN tocar la DB.
-  const lastGood = await withDb(async (c) => {
-    const r = await c.queryObject<{ n: bigint }>("select count(*)::bigint as n from sms_analytics.cohort");
-    return Number(r.rows[0].n);
-  });
-  const minOk = lastGood > 0 ? Math.floor(lastGood * 0.5) : 1;
-  if (contacts.size < minOk) {
-    return { error: "seed abortado: enum junto muy pocos (probable 429), cohorte preservada",
-      collected: contacts.size, minOk, lastGood };
-  }
-
-  // Solo si termino la enumeracion: truncar + insertar (won se marca despues).
-  const rows = [...contacts.entries()];
-  await withDb(async (c) => {
-    await c.queryObject("truncate sms_analytics.cohort, sms_analytics.msg_events");
-    for (let i = 0; i < rows.length; i += 500) {
-      const chunk = rows.slice(i, i + 500);
-      const vals = chunk.map((_, j) => `($${j * 2 + 1},$${j * 2 + 2},false)`).join(",");
-      const args = chunk.flatMap((r) => [r[0], r[1]]);
-      await c.queryArray(
-        `insert into sms_analytics.cohort(contact_id,name,won) values ${vals} on conflict (contact_id) do nothing`, args);
-    }
-    await c.queryObject(
-      `update sms_analytics.run set started_at=now(), seeded=$1, finished_at=null, note='seeded-conv', phase_tries=0 where id=1`, [rows.length]);
-    await c.queryArray(
-      `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(t0)]);
-  });
-  return { seeded: rows.length, chunks: nDays, elapsedMs: Date.now() - t0 };
+  return { contacts, timedOut };
 }
 
-// ---- REFRESH: actualizacion on-demand. Si la cohorte no esta poblada -> full
-// (seed, ~2h). Si esta poblada -> INCREMENTAL: solo trae los contactos con
-// actividad NUEVA desde el ultimo refresh y los re-encola (done=false); el drain
-// procesa solo ese delta (minutos). Poda los que quedaron fuera de la ventana.
-async function refresh(cfg: Record<string, string>) {
-  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  const t0 = Date.now();
-  const cohortN = await withDb(async (c) => {
-    const r = await c.queryObject<{ n: bigint }>("select count(*)::bigint as n from sms_analytics.cohort");
-    return Number(r.rows[0].n);
-  });
-  if (cohortN < 10000) { const r = await seed(cfg); return { mode: "full", cohortWas: cohortN, ...r }; }
-
-  const lr = await withDb(async (c) => {
-    const r = await c.queryObject<{ value: string }>("select value from sms_analytics.config where key='last_refresh_ms'");
-    return r.rows[0]?.value ? Number(r.rows[0].value) : (t0 - 3 * 86400000);
-  });
-  const since = lr - 12 * 3600000; // 12h de overlap para agarrar conversaciones actualizadas
+// Las conversaciones con actividad desde `since`. `caught` = se llegó al final de
+// la cola. Distinguirlo de salir por tope es lo que evita saltearse un tramo: ver
+// la marca en refresh().
+async function enumSince(loc: Loc, since: number, deadline: number) {
   const contacts = new Map<string, string>();
-  let cursor = String(since), pages = 0; const deadline = t0 + 110000;
-  // `caught` = se llegó al final de la cola de conversaciones. Distinguirlo de
-  // salir por tope es lo que evita saltearse un tramo: ver la marca de abajo.
-  let caught = false;
+  let cursor = String(since), pages = 0, caught = false;
   while (pages < 800 && Date.now() < deadline) {
-    const u = BASE + "/conversations/search?locationId=" + loc + "&limit=100&sortBy=last_message_date&sort=asc&startAfterDate=" + cursor;
-    const d = await gget(u, key);
-    const convs = d?.conversations ?? [];
+    const u = BASE + "/conversations/search?locationId=" + loc.id + "&limit=100&sortBy=last_message_date&sort=asc&startAfterDate=" + cursor;
+    const d = await gget(u, loc.key);
+    // Un request que GHL no contestó NO es "llegué al final": antes marcaba
+    // caught=true y el tramo que faltaba quedaba salteado para siempre.
+    if (!d) break;
+    const convs = d.conversations ?? [];
     if (!convs.length) { caught = true; break; }
     for (const cv of convs) { const cid = cv.contactId; if (cid) contacts.set(cid, cv.contactName || cv.fullName || ""); }
     const lastLmd = convs[convs.length - 1]?.lastMessageDate ?? 0;
@@ -427,38 +457,191 @@ async function refresh(cfg: Record<string, string>) {
     cursor = nc; pages++;
     if (convs.length < 100) { caught = true; break; }
   }
-  // Marcar t0 cuando la enumeración se cortó por tope (800 páginas o 110s) deja
-  // el tramo no recorrido SALTEADO PARA SIEMPRE: el próximo refresh arranca de t0
-  // y nadie vuelve a mirar el hueco. Si no se llegó al final, se guarda hasta
-  // donde de verdad se llegó, así el siguiente refresh retoma ahí.
-  const mark = caught ? t0 : Math.max(Number(cursor) || since, since);
-  const rows = [...contacts.entries()];
-  await withDb(async (c) => {
-    for (let i = 0; i < rows.length; i += 500) {
-      const chunk = rows.slice(i, i + 500);
-      const vals = chunk.map((_, j) => `($${j * 2 + 1},$${j * 2 + 2},false)`).join(",");
-      const args = chunk.flatMap((r) => [r[0], r[1]]);
-      // nuevos -> insert (done=false); existentes -> reset a not-done para re-procesar.
-      await c.queryArray(
-        `insert into sms_analytics.cohort(contact_id,name,won) values ${vals}
-         on conflict (contact_id) do update set done=false, attempts=0`, args);
-    }
-    // La poda se lleva también los eventos del contacto. Sin esto quedaban
-    // huérfanos para siempre: en octubre 2026 eran 1,66M de 2,06M filas, y el
-    // build las barría todas.
-    await c.queryObject(
-      `with gone as (
-         delete from sms_analytics.cohort
-          where entered_at is not null and entered_at < now() - ($1 || ' days')::interval
-          returning contact_id)
-       delete from sms_analytics.msg_events e using gone where e.contact_id = gone.contact_id`,
-      [String(WINDOW_DAYS + 3)]);
+  return { contacts, pages, caught, cursor };
+}
+
+// GUARD anti-wipe: si GHL rate-limitea (429), la enumeración junta 0/pocos y NO
+// hay que reemplazar la cohorte buena. Se mide contra lo que esa location ya
+// tiene: si la nueva cae por debajo del 50%, esa location no se toca.
+function seedGuard(loc: Loc, e: { contacts: Map<string, string>; timedOut: boolean }, lastGood: number) {
+  if (e.timedOut) return { location: loc.label, error: "enum timeout", collected: e.contacts.size };
+  const minOk = lastGood > 0 ? Math.floor(lastGood * 0.5) : 1;
+  if (e.contacts.size < minOk) {
+    return { location: loc.label, error: "seed abortado: enum juntó muy pocos (probable 429), cohorte preservada",
+      collected: e.contacts.size, minOk, lastGood };
+  }
+  return null;
+}
+
+async function cohortCounts(c: Client): Promise<Record<string, number>> {
+  const r = await c.queryObject<{ location: string; n: bigint }>(
+    "select location, count(*)::bigint as n from sms_analytics.cohort group by location");
+  const out: Record<string, number> = {};
+  for (const row of r.rows) out[row.location] = Number(row.n);
+  return out;
+}
+
+async function setConfig(c: Client, key: string, value: string) {
+  await c.queryArray(
+    `insert into sms_analytics.config(key,value) values ($1,$2) on conflict (key) do update set value=excluded.value`,
+    [key, value]);
+}
+
+// Alta en la cohorte. `requeue`: si el contacto ya estaba, se vuelve a procesar.
+async function insertCohort(c: Client, locId: string, rows: [string, string][], requeue: boolean) {
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500);
+    const L = chunk.length * 2 + 1;
+    const vals = chunk.map((_, j) => `($${j * 2 + 1},$${j * 2 + 2},false,$${L})`).join(",");
+    const args = [...chunk.flatMap((r) => [r[0], r[1]]), locId];
     await c.queryArray(
-      `insert into sms_analytics.config(key,value) values ('last_refresh_ms',$1) on conflict (key) do update set value=excluded.value`, [String(mark)]);
-    await c.queryObject(`update sms_analytics.run set started_at=now(), finished_at=null, note='refresh-inc', phase_tries=0 where id=1`);
+      `insert into sms_analytics.cohort(contact_id,name,won,location) values ${vals}
+       on conflict (contact_id) do ${requeue ? "update set done=false, attempts=0, location=excluded.location" : "nothing"}`,
+      args);
+  }
+}
+
+// ---- SEED: cohorte = TODOS los contactos texteados en la ventana ------------
+// Denominador por MENSAJES (no por oportunidad). El 'won' (LT) se marca aparte con
+// ?action=markwon; work() clasifica por tags.
+//
+// `onlyLoc` (?action=seed&loc=<location id>) re-siembra una sola location y deja
+// intactas las demás. Si se re-siembra todo lo que hay en la cohorte, truncate
+// como siempre: borrar fila por fila los eventos de GHL 1 no entra en 150s.
+async function seed(cfg: Record<string, string>, onlyLoc?: string | null) {
+  const t0 = Date.now();
+  let locs = activeLocs(cfg);
+  if (onlyLoc) locs = locs.filter((l) => l.id === onlyLoc);
+  if (!locs.length) return { error: onlyLoc ? "esa location no está configurada con key: " + onlyLoc : "no hay ninguna location de GHL con key en config" };
+  const deadline = t0 + ENUM_DEADLINE_MS;
+
+  const counts = await withDb(cohortCounts);
+  const enums = await Promise.all(locs.map(async (l) => ({ l, e: await enumWindow(l, t0, deadline) })));
+  const ok: typeof enums = [], skipped: any[] = [];
+  for (const x of enums) {
+    const g = seedGuard(x.l, x.e, counts[x.l.id] || 0);
+    if (g) skipped.push(g); else ok.push(x);
+  }
+  if (!ok.length) return { error: "seed abortado, cohorte preservada", locations: skipped };
+
+  const okIds = ok.map((x) => x.l.id);
+  const truncate = Object.keys(counts).every((id) => okIds.includes(id));
+  let seeded = 0;
+  // En una transacción: si la invocación muere a mitad (tope de 150s), la conexión
+  // se cae y Postgres revierte, en vez de dejar una location borrada y a medio
+  // insertar.
+  await withDb(async (c) => {
+    await c.queryArray("begin");
+    try {
+      if (truncate) {
+        await c.queryObject("truncate sms_analytics.cohort, sms_analytics.msg_events");
+      } else {
+        await c.queryArray(
+          `delete from sms_analytics.msg_events e using sms_analytics.cohort c
+            where c.contact_id = e.contact_id and c.location = any($1::text[])`, [okIds]);
+        await c.queryArray(`delete from sms_analytics.cohort where location = any($1::text[])`, [okIds]);
+      }
+      // Solo si terminó la enumeración: insertar (won se marca después).
+      for (const x of ok) {
+        await insertCohort(c, x.l.id, [...x.e.contacts.entries()], false);
+        await setConfig(c, markKey(x.l), String(t0));
+        seeded += x.e.contacts.size;
+      }
+      await c.queryObject(
+        `update sms_analytics.run set started_at=now(), seeded=$1, finished_at=null, note='seeded-conv', phase_tries=0 where id=1`, [seeded]);
+      await c.queryArray("commit");
+    } catch (e) { await c.queryArray("rollback").catch(() => {}); throw e; }
   });
-  return { mode: "incremental", delta: rows.length, pages, caughtUp: caught,
-    truncated: !caught, markedAt: mark, elapsedMs: Date.now() - t0 };
+  return { seeded, truncated: truncate,
+    locations: [...ok.map((x) => ({ location: x.l.label, seeded: x.e.contacts.size })), ...skipped],
+    chunks: WINDOW_DAYS + 2, elapsedMs: Date.now() - t0 };
+}
+
+// ---- REFRESH: actualización on-demand, location por location -----------------
+// Una location sin filas en la cohorte nunca se bajó: se siembra su ventana
+// entera (es lo que pasa la primera vez que se configura una). Las demás van
+// INCREMENTAL: solo los contactos con actividad NUEVA desde su último refresh,
+// re-encolados (done=false); el drain procesa solo ese delta. Poda los que
+// quedaron fuera de la ventana.
+async function refresh(cfg: Record<string, string>) {
+  const t0 = Date.now();
+  const locs = activeLocs(cfg);
+  if (!locs.length) return { error: "no hay ninguna location de GHL con key en config" };
+  const deadline = t0 + ENUM_DEADLINE_MS;
+
+  const st = await withDb(async (c) => {
+    const counts = await cohortCounts(c);
+    const m = await c.queryObject<{ key: string; value: string }>(
+      "select key,value from sms_analytics.config where key like 'last_refresh_ms%'");
+    const marks: Record<string, number> = {};
+    for (const r of m.rows) marks[r.key] = Number(r.value);
+    return { counts, marks };
+  });
+
+  const jobs = await Promise.all(locs.map(async (l) => {
+    if (!(st.counts[l.id] > 0)) {
+      const e = await enumWindow(l, t0, deadline);
+      return { l, mode: "seed", contacts: e.contacts, guard: seedGuard(l, e, 0) };
+    }
+    const lr = st.marks[markKey(l)] || (t0 - 3 * 86400000);
+    const since = lr - 12 * 3600000; // 12h de overlap para agarrar conversaciones actualizadas
+    const e = await enumSince(l, since, deadline);
+    return { l, mode: "incremental", contacts: e.contacts, since, pages: e.pages, caught: e.caught, cursor: e.cursor };
+  }));
+
+  const out: any[] = [];
+  let delta = 0, healed = 0;
+  // En una transacción, como el seed: si la invocación muere a mitad de sembrar
+  // una location nueva, sin esto quedaba una siembra parcial que el próximo
+  // refresh daba por buena (la location ya "tiene filas") y nunca completaba.
+  await withDb(async (c) => {
+    await c.queryArray("begin");
+    try {
+      for (const j of jobs as any[]) {
+        if (j.mode === "seed") {
+          if (j.guard) { out.push({ mode: "seed", ...j.guard }); continue; }
+          await insertCohort(c, j.l.id, [...j.contacts.entries()], false);
+          await setConfig(c, markKey(j.l), String(t0));
+          out.push({ location: j.l.label, mode: "seed", seeded: j.contacts.size });
+        } else {
+          // nuevos -> insert (done=false); existentes -> reset a not-done para re-procesar.
+          await insertCohort(c, j.l.id, [...j.contacts.entries()], true);
+          // Marcar t0 cuando la enumeración se cortó por tope (800 páginas, 105s o
+          // un request sin respuesta) deja el tramo no recorrido SALTEADO PARA
+          // SIEMPRE. Si no se llegó al final, se guarda hasta dónde de verdad se
+          // llegó, así el siguiente refresh retoma ahí.
+          const mark = j.caught ? t0 : Math.max(Number(j.cursor) || j.since, j.since);
+          await setConfig(c, markKey(j.l), String(mark));
+          out.push({ location: j.l.label, mode: "incremental", delta: j.contacts.size, pages: j.pages,
+            caughtUp: j.caught, truncated: !j.caught, markedAt: mark });
+        }
+        delta += j.contacts.size;
+      }
+      // La poda se lleva también los eventos del contacto. Sin esto quedaban
+      // huérfanos para siempre: en octubre 2026 eran 1,66M de 2,06M filas, y el
+      // build las barría todas.
+      await c.queryObject(
+        `with gone as (
+           delete from sms_analytics.cohort
+            where entered_at is not null and entered_at < now() - ($1 || ' days')::interval
+            returning contact_id)
+         delete from sms_analytics.msg_events e using gone where e.contact_id = gone.contact_id`,
+        [String(WINDOW_DAYS + 3)]);
+      // Las filas que procesó la versión anterior no tienen teléfono, y sin él no se
+      // pueden deduplicar entre locations. Se re-encolan las de secuencias medidas
+      // (las 'none' no se cuentan en ninguna): pasa una sola vez, porque work()
+      // siempre deja phone_key en un hash o en ''.
+      const h = await c.queryObject<{ n: bigint }>(
+        `with u as (update sms_analytics.cohort set done=false, attempts=0
+                     where done and phone_key is null and wf is not null and wf <> 'none'
+                     returning 1)
+         select count(*)::bigint as n from u`);
+      healed = Number(h.rows[0].n);
+      await c.queryObject(`update sms_analytics.run set started_at=now(), finished_at=null, note='refresh-inc', phase_tries=0 where id=1`);
+      await c.queryArray("commit");
+    } catch (e) { await c.queryArray("rollback").catch(() => {}); throw e; }
+  });
+  return { mode: "per-location", delta, healed, locations: out, elapsedMs: Date.now() - t0 };
 }
 
 // ---- MARKWON: marca cohort.won desde oportunidades ganadas (numerador LT) ----
@@ -467,10 +650,10 @@ async function refresh(cfg: Record<string, string>) {
 // PARALELO (trae solo los LT -> pocos, rapido, completo). El code-check por stage
 // mantiene la correccion aunque GHL ignore el filtro. Partners Wins = status=won.
 // Desacoplado del seed; build() cruza (trigger AND won), asi el orden no afecta.
-async function markwon(cfg: Record<string, string>) {
-  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  const t0 = Date.now();
-  const pdata = await gget(BASE + "/opportunities/pipelines?locationId=" + loc, key);
+// Misma regla en cada location: en GHL 2 cuenta CENTURY OPENING; AI OPENING no
+// tiene etapa "ganad" (su "Transferido" no se cuenta), igual que en GHL 1.
+async function wonOf(loc: Loc, cutoff: number, deadline: number) {
+  const pdata = await gget(BASE + "/opportunities/pipelines?locationId=" + loc.id, loc.key);
   const pls = pdata?.pipelines ?? []; if (!pls.length) throw new Error("pipelines unavailable");
   const tasks: { pid: string; stage?: string; partner?: boolean }[] = [];
   for (const p of pls) {
@@ -481,51 +664,75 @@ async function markwon(cfg: Record<string, string>) {
       tasks.push({ pid: p.id, partner: true });
     }
   }
-  const cutoff = t0 - (WINDOW_DAYS + 7) * 86400000;
-  const deadline = t0 + 115000;
   const won = new Set<string>();
   await pool(tasks, 8, async (tk) => {
-    let url: string | undefined = BASE + "/opportunities/search?location_id=" + loc + "&pipeline_id=" + tk.pid +
+    let url: string | undefined = BASE + "/opportunities/search?location_id=" + loc.id + "&pipeline_id=" + tk.pid +
       (tk.stage ? "&pipeline_stage_id=" + tk.stage : "") + "&status=all&limit=100&order=added_desc";
     let pg = 0;
     while (url && pg < 300 && Date.now() < deadline) {
-      const d = await gget(url, key); if (!d) break;
+      const d = await gget(url, loc.key); if (!d) break;
       const ops = d.opportunities ?? []; if (!ops.length) break;
       for (const o of ops) {
         const w = tk.stage ? (o.pipelineStageId === tk.stage) : (o.status === "won");
         if (w && o.contactId) won.add(o.contactId);
       }
       url = d.meta?.nextPageUrl; pg++;
-      if (ops.length && ops.every((o: any) => (Date.parse(o.createdAt || "") || t0) < cutoff)) break;
+      if (ops.length && ops.every((o: any) => (Date.parse(o.createdAt || "") || deadline) < cutoff)) break;
     }
   });
+  return { won, tasks: tasks.length };
+}
+
+async function markwon(cfg: Record<string, string>) {
+  const t0 = Date.now();
+  const locs = activeLocs(cfg);
+  if (!locs.length) throw new Error("no hay ninguna location de GHL con key en config");
+  const cutoff = t0 - (WINDOW_DAYS + 7) * 86400000;
+  const deadline = t0 + 115000;
+  const per = await Promise.all(locs.map(async (l) => {
+    try { return { l, ...(await wonOf(l, cutoff, deadline)), error: null as string | null }; }
+    catch (e) { return { l, won: new Set<string>(), tasks: 0, error: String(e) }; }
+  }));
+  const ok = per.filter((p) => !p.error);
+  if (!ok.length) throw new Error(per.map((p) => p.l.label + ": " + p.error).join("; "));
   const marked = await withDb(async (c) => {
-    await c.queryObject("update sms_analytics.cohort set won=false where won");
-    let n = 0; const arr = [...won];
-    for (let i = 0; i < arr.length; i += 500) {
-      const chunk = arr.slice(i, i + 500);
-      const ph = chunk.map((_, j) => `$${j + 1}`).join(",");
-      const r = await c.queryObject<{ n: bigint }>(
-        `with u as (update sms_analytics.cohort set won=true where contact_id in (${ph}) returning 1)
-         select count(*)::bigint as n from u`, chunk);
-      n += Number(r.rows[0].n);
+    let n = 0;
+    // Solo se resetea la location que contestó: si GHL 2 falla, sus LT quedan como
+    // estaban en vez de caer todos a 0 hasta el próximo markwon.
+    for (const p of ok) {
+      await c.queryArray("update sms_analytics.cohort set won=false where won and location=$1", [p.l.id]);
+      const arr = [...p.won];
+      for (let i = 0; i < arr.length; i += 500) {
+        const chunk = arr.slice(i, i + 500);
+        const ph = chunk.map((_, j) => `$${j + 2}`).join(",");
+        const r = await c.queryObject<{ n: bigint }>(
+          `with u as (update sms_analytics.cohort set won=true where location=$1 and contact_id in (${ph}) returning 1)
+           select count(*)::bigint as n from u`, [p.l.id, ...chunk]);
+        n += Number(r.rows[0].n);
+      }
     }
     return n;
   });
-  return { wonFound: won.size, marked, tasks: tasks.length, elapsedMs: Date.now() - t0 };
+  return { wonFound: ok.reduce((a, p) => a + p.won.size, 0), marked, tasks: ok.reduce((a, p) => a + p.tasks, 0),
+    locations: per.map((p) => p.error ? { location: p.l.label, error: p.error } : { location: p.l.label, wonFound: p.won.size, tasks: p.tasks }),
+    elapsedMs: Date.now() - t0 };
 }
 
 // ---- WORK: procesa una tanda, acotado por TIEMPO ----------------------------
+// Cada contacto se baja de SU location, con la key de esa location. El lote
+// mezcla locations, así que mientras una espera su cupo la otra sigue.
 async function work(cfg: Record<string, string>, budgetMs: number) {
   const t0 = Date.now();
-  const key = cfg.ghl_api_key, loc = cfg.ghl_location;
-  let processed = 0;
+  const byId: Record<string, Loc> = {};
+  for (const l of activeLocs(cfg)) byId[l.id] = l;
+  const primary = primaryLoc(cfg);
+  let processed = 0, retry = 0;
 
   // Lotes de 60: cuando Supabase corta un request por tope de CPU (546) se pierde
   // el lote en curso entero. El 20/10/2026 se cortaron 11 de ~25 con lotes de 120.
   while (Date.now() - t0 < budgetMs) {
     const batch = await withDb(async (c) => {
-      const r = await c.queryObject<{ contact_id: string; name: string; won: boolean }>(
+      const r = await c.queryObject<{ contact_id: string; name: string; won: boolean; location: string }>(
         `update sms_analytics.cohort set attempts = attempts + 1
          where contact_id in (
            select contact_id from sms_analytics.cohort
@@ -534,20 +741,26 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
            limit 60
            for update skip locked
          )
-         returning contact_id, name, won`);
+         returning contact_id, name, won, location`);
       return r.rows;
     });
     if (!batch.length) break;
 
+    // null = no se pudo bajar ahora (GHL no contestó, o la location se quedó sin
+    // key): el contacto queda pendiente y el próximo lote lo reintenta. A los 3
+    // intentos deja de contar como pendiente, así que no traba a work_tick.
     const results = await pool(batch, 14, async (t) => {
-      const cd = await gget(BASE + "/conversations/search?locationId=" + loc + "&contactId=" + t.contact_id, key);
-      const convs = cd?.conversations ?? [];
+      const loc = byId[t.location || primary];
+      if (!loc) return null;
+      const cd = await gget(BASE + "/conversations/search?locationId=" + loc.id + "&contactId=" + t.contact_id, loc.key);
+      if (!cd) return null;
+      const convs = cd.conversations ?? [];
       const msgs: any[] = [];
       for (const cv of convs.slice(0, 4)) {
         let last = "";
         for (let p = 0; p < 5; p++) {
           const mu = BASE + "/conversations/" + cv.id + "/messages?limit=100" + (last ? "&lastMessageId=" + last : "");
-          const md = await gget(mu, key); const block = md?.messages; const arr = block?.messages ?? [];
+          const md = await gget(mu, loc.key); const block = md?.messages; const arr = block?.messages ?? [];
           if (!arr.length) break; msgs.push(...arr);
           if (!block?.nextPage) break; last = block?.lastMessageId || ""; if (!last) break;
         }
@@ -557,7 +770,9 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
         .sort((a: any, b: any) => (a.dateAdded || "") < (b.dateAdded || "") ? -1 : 1);
 
       const firstOut = sms.find((m: any) => m.direction === "outbound");
-      const { sequence: wf, branch } = await getSequenceAndBranchFromGHLTags(t.contact_id, key);
+      const info = await contactInfo(t.contact_id, loc);
+      if (!info) return null;
+      const { sequence: wf, branch, phoneKey } = info;
       const enteredAt = firstOut?.dateAdded || null;
 
       let fi = -1;
@@ -578,13 +793,13 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
         events.push({ tmpl: tm, key: hashKey(tm), pos, sent: m.dateAdded || null, reply, dnd, isTrigger: i === trgIdx });
       }
       const trg = events.find((e) => e.isTrigger);
-      return { t, wf, branch, enteredAt, replied: fi >= 0, events,
+      return { t, loc: loc.id, wf, branch, phoneKey, enteredAt, replied: fi >= 0, events,
         triggerKey: trg?.key ?? null, triggerPos: trg?.pos ?? null };
     });
 
     await withDb(async (c) => {
       for (const r of results) {
-        if (!r) continue;
+        if (!r) { retry++; continue; }
         const uniq = new Map<string, string>();
         for (const e of r.events) uniq.set(e.key, e.tmpl);
         if (uniq.size) {
@@ -595,28 +810,28 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
             arr.flat());
         }
         await c.queryArray(`delete from sms_analytics.msg_events where contact_id=$1`, [r.t.contact_id]);
-        // Solo guardamos msg_events de las 3 secuencias; los 'none' (mayoria) no
-        // aportan al dashboard. led_to_lt = isTrigger (el 'won' se cruza en build).
+        // Solo guardamos msg_events de las secuencias medidas; los 'none' (mayoria)
+        // no aportan al dashboard. led_to_lt = isTrigger (el 'won' se cruza en build).
         if (r.events.length && r.wf !== "none") {
           for (let i = 0; i < r.events.length; i += 200) {
             const chunk = r.events.slice(i, i + 200);
             const vals = chunk.map((_, j) => {
-              const b = j * 8;
-              return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5}::timestamptz,$${b + 6},$${b + 7},$${b + 8})`;
+              const b = j * 9;
+              return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5}::timestamptz,$${b + 6},$${b + 7},$${b + 8},$${b + 9})`;
             }).join(",");
             const args = chunk.flatMap((e: any) => [r.t.contact_id, r.wf, e.key, e.pos, e.sent, e.reply,
-              !!e.isTrigger, e.dnd]);
+              !!e.isTrigger, e.dnd, r.loc]);
             await c.queryArray(
-              `insert into sms_analytics.msg_events(contact_id,wf,tmpl_key,pos,sent_at,got_reply,led_to_lt,led_to_dnd)
+              `insert into sms_analytics.msg_events(contact_id,wf,tmpl_key,pos,sent_at,got_reply,led_to_lt,led_to_dnd,location)
                values ${vals}`, args);
           }
         }
         await c.queryArray(
           `update sms_analytics.cohort
            set wf=$2, branch=$7, entered_at=$3::timestamptz, replied=$4, trigger_key=$5, trigger_pos=$6,
-               done=true, fetched_at=now()
+               phone_key=$8, location=$9, done=true, fetched_at=now()
            where contact_id=$1`,
-          [r.t.contact_id, r.wf, r.enteredAt, r.replied, r.triggerKey, r.triggerPos, r.branch]);
+          [r.t.contact_id, r.wf, r.enteredAt, r.replied, r.triggerKey, r.triggerPos, r.branch, r.phoneKey, r.loc]);
         processed++;
       }
     });
@@ -627,7 +842,7 @@ async function work(cfg: Record<string, string>, budgetMs: number) {
       `select count(*)::bigint as n from sms_analytics.cohort where not done and attempts < 3`);
     return Number(r.rows[0].n);
   });
-  return { processed, remaining, elapsedMs: Date.now() - t0 };
+  return { processed, retry, remaining, elapsedMs: Date.now() - t0 };
 }
 
 // ---- BUILD: arma el snapshot con las 3 ventanas -----------------------------
@@ -741,6 +956,38 @@ async function coldBranchTables(c: Client) {
   await c.queryArray(`create index on cold_contact_br(contact_id)`);
 }
 
+// Una persona cuenta UNA vez. La rotación de tokens dejó ~1.460 teléfonos con un
+// contacto en GHL 1 y otro en GHL 2 (sep–nov 2026): contados por contacto, la
+// misma persona entraba dos veces al denominador. Se arma una vez por build, en
+// la temporal cohort_u, con un contacto por teléfono, y TODO build lee de ahí:
+//   · uno en una secuencia medida le gana a uno 'none' (si no, un contacto viejo
+//     sin secuencia le borraría la entrada a uno que sí la tiene);
+//   · entre ésos, el que entró PRIMERO: el ingreso es el primer SMS de la
+//     persona, igual que para un contacto solo, donde una re-entrada tampoco es
+//     un ingreso nuevo. Mientras el contacto de GHL 1 siga en la ventana (~28/11),
+//     un lead de tarjeta que ya recibió la secuencia allá no entra como nuevo a
+//     la de GHL 2;
+//   · el LT es de la persona: si cualquiera de sus contactos llegó a LT, cuenta
+//     para el que quedó.
+// Sin teléfono (phone_key '' o null) no hay con qué juntar: el contacto va solo.
+// Mira toda la cohorte (33 días) y no la ventana, para que quién quedó no cambie
+// según la ventana que se mire.
+async function cohortDedupTable(c: Client) {
+  await c.queryArray(`drop table if exists cohort_u`);
+  await c.queryArray(
+    `create temp table cohort_u as
+     select distinct on (person) contact_id, location, wf, branch, entered_at,
+            bool_or(won) over (partition by person) as won,
+            count(*) over (partition by person)::int as copies
+     from (select contact_id, location, wf, branch, entered_at, won,
+                  coalesce(nullif(phone_key, ''), contact_id) as person
+             from sms_analytics.cohort
+            where done and entered_at is not null) x
+     order by person, (coalesce(wf, 'none') = 'none'), entered_at, contact_id`);
+  await c.queryArray(`create index on cohort_u(contact_id)`);
+  await c.queryArray(`analyze cohort_u`);
+}
+
 // La rama de cada contacto se arma UNA vez por build, en la temporal contact_br,
 // sobre la ventana más ancha; las ventanas chicas la filtran por entered_at.
 // Antes esto era un CTE que corría en 2 consultas × 3 ventanas, y su `firstmsg`
@@ -755,8 +1002,8 @@ async function contactBranchTable(c: Client, days: number) {
     `create temp table contact_br as
      with win as (
        select contact_id, wf, won, branch, entered_at
-       from sms_analytics.cohort
-       where done and entered_at >= now() - interval '${d} days'
+       from cohort_u
+       where entered_at >= now() - interval '${d} days'
      ),
      firstmsg as (
        select distinct on (e.contact_id) e.contact_id, t.tmpl
@@ -824,7 +1071,10 @@ const BUILD_AI_CUTOFF_MS = 70000;
 async function build(cfg?: Record<string, string>) {
   const t0 = Date.now();
   return await withDb(async (c) => {
-    const out: any = { generatedAt: new Date().toISOString(), windows: {} };
+    // Las locations configuradas, para que el dashboard sepa si tiene que decir de
+    // cuál es cada secuencia. Nunca la key: solo id, nombre y si se pudo leer.
+    const out: any = { generatedAt: new Date().toISOString(), windows: {},
+      locations: locsOf(cfg || {}).map((l) => ({ id: l.id, label: l.label, active: !!l.key })) };
 
     // Frescura REAL de los datos, no del snapshot. Son dos cosas distintas y la
     // diferencia es justo la que se puede volver peligrosa: `build` filtra las
@@ -834,19 +1084,21 @@ async function build(cfg?: Record<string, string>) {
     // cuándo se fue a buscar a GHL por última vez. El dashboard estampa esto.
     const fresh = await c.queryObject<{ data_through: string | null; last_refresh: string | null }>(
       `select (select max(sent_at) from sms_analytics.msg_events) as data_through,
-              (select to_timestamp((value)::bigint/1000)
-                 from sms_analytics.config where key='last_refresh_ms') as last_refresh`);
+              -- la location MENOS fresca: con dos, "cuándo se fue a buscar" es la peor
+              (select to_timestamp(min((value)::bigint)/1000)
+                 from sms_analytics.config where key like 'last_refresh_ms%') as last_refresh`);
     out.dataThrough = fresh.rows[0]?.data_through ? new Date(fresh.rows[0].data_through).toISOString() : null;
     out.lastRefreshAt = fresh.rows[0]?.last_refresh ? new Date(fresh.rows[0].last_refresh).toISOString() : null;
     // Cobertura del tag de rama en lo que entró ÚLTIMO. Es distinto de la
     // cobertura de la ventana: dice si el workflow está bien configurado HOY,
     // sin que lo tape el histórico anterior a que se agregara el tag. Cuando
     // arranca una secuencia nueva no hay con qué opinar, así que va null.
+    await cohortDedupTable(c);
     const recent = await c.queryObject<{ wf: string; n: bigint; tagged: bigint }>(
       `select wf, count(*)::bigint as n,
               count(*) filter (where coalesce(branch,'-') <> '-')::bigint as tagged
-         from sms_analytics.cohort
-        where done and wf <> 'none' and entered_at >= now() - interval '7 days'
+         from cohort_u
+        where wf <> 'none' and entered_at >= now() - interval '7 days'
         group by wf`);
     const byRecent: Record<string, { n: number; tagged: number }> = {};
     for (const r of recent.rows) byRecent[r.wf] = { n: Number(r.n), tagged: Number(r.tagged) };
@@ -858,11 +1110,18 @@ async function build(cfg?: Record<string, string>) {
       const seqs = await c.queryObject<{ wf: string; ing: bigint; lt: bigint; tagged: bigint }>(
         `select wf, count(*)::bigint as ing, count(*) filter (where won)::bigint as lt,
                 count(*) filter (where coalesce(branch,'-') <> '-')::bigint as tagged
-         from sms_analytics.cohort
-         where done and entered_at >= now() - ($1 || ' days')::interval
+         from cohort_u
+         where entered_at >= now() - ($1 || ' days')::interval
          group by wf`, [String(win)]);
       const byWf: Record<string, { ing: number; lt: number; tagged: number }> = {};
       for (const r of seqs.rows) byWf[r.wf] = { ing: Number(r.ing), lt: Number(r.lt), tagged: Number(r.tagged) };
+      // Cuántos contactos de la ventana no se contaron por ser la misma persona
+      // que otro (mismo teléfono). Se estampa para que la deduplicación se vea.
+      const dup = await c.queryObject<{ n: bigint }>(
+        `select (select count(*) from sms_analytics.cohort
+                  where done and entered_at >= now() - ($1 || ' days')::interval)
+              - (select count(*) from cohort_u
+                  where entered_at >= now() - ($1 || ' days')::interval) as n`, [String(win)]);
 
       // Mismo universo de contactos que `seqs` (done + ventana), partido por rama,
       // para que las ramas sumen el total de su secuencia.
@@ -975,11 +1234,13 @@ async function build(cfg?: Record<string, string>) {
           const tagPctRecent = rc && rc.n >= 20 ? Math.round(1000 * rc.tagged / rc.n) / 10 : null;
           const branchSource = !branches.length ? "none"
             : (tagPct != null && tagPct >= 90 ? "tag" : "text");
-          return { key: w.key, label: w.label, ing: s.ing, lt: s.lt,
+          return { key: w.key, label: w.label, location: w.location, loc: locLabel(cfg || {}, w.location),
+            ing: s.ing, lt: s.lt,
             cr: s.ing ? Math.round(10000 * s.lt / s.ing) / 100 : null,
             branches, tagPct, tagPctRecent, recentN: rc ? rc.n : 0, branchSource };
         }),
         unidentified: byWf["none"] || { ing: 0, lt: 0 },
+        dupes: Number(dup.rows[0]?.n || 0),
         msgs: msgsByWf,
       };
       out.windows[win].insights = computeInsights(out.windows[win]);
@@ -1013,7 +1274,7 @@ async function build(cfg?: Record<string, string>) {
   });
 }
 
-async function status() {
+async function status(cfg: Record<string, string>) {
   return await withDb(async (c) => {
     const r = await c.queryObject<any>(
       `select (select count(*) from sms_analytics.cohort)::int as total,
@@ -1027,7 +1288,22 @@ async function status() {
               (select finished_at from sms_analytics.run where id=1) as finished_at,
               (select phase_at from sms_analytics.run where id=1) as phase_at,
               (select phase_tries from sms_analytics.run where id=1) as phase_tries`);
-    return r.rows[0];
+    // Por location: si GHL 2 no se está bajando (falta la key, o todo quedó en
+    // `failed`), tiene que verse acá y no solo como una secuencia en 0.
+    const pl = await c.queryObject<{ location: string; total: number; done: number; pending: number; failed: number }>(
+      `select location, count(*)::int as total, count(*) filter (where done)::int as done,
+              count(*) filter (where not done and attempts < 3)::int as pending,
+              count(*) filter (where not done and attempts >= 3)::int as failed
+         from sms_analytics.cohort group by location`);
+    const byLoc: Record<string, any> = {};
+    for (const row of pl.rows) byLoc[row.location] = row;
+    const locations = locsOf(cfg).map((l) => {
+      const x = byLoc[l.id] || { total: 0, done: 0, pending: 0, failed: 0 };
+      return { id: l.id, label: l.label, active: !!l.key,
+        ...(l.key ? {} : { missing: "ghl_api_key" + (l.n === 1 ? "" : "_" + l.n) + " en sms_analytics.config" }),
+        total: x.total, done: x.done, pending: x.pending, failed: x.failed };
+    });
+    return { ...r.rows[0], locations };
   });
 }
 
@@ -1046,7 +1322,10 @@ function perfMd(snap: any, win: string): string {
   md += "## perf.sequences [item: sequence-summary]\n";
   md += "| key | sequence | contacts_entered | live_transfers | conversion_to_LT |\n|---|---|--:|--:|--:|\n";
   const seqs = (w.sequences || []).slice().sort((a: any, b: any) => (b.cr == null ? -1 : b.cr) - (a.cr == null ? -1 : a.cr));
-  for (const s of seqs) md += "| " + s.key + " | " + s.label + " | " + (s.ing == null ? "-" : s.ing) + " | " + (s.lt == null ? "-" : s.lt) + " | " + (s.cr == null ? "-" : s.cr + "%") + " |\n";
+  // Con más de una location, la misma secuencia puede estar en las dos: se dice de cuál es cada fila.
+  const multiLoc = new Set(seqs.map((s: any) => s.loc).filter(Boolean)).size > 1;
+  const seqLbl = (s: any) => s.label + (multiLoc && s.loc ? " [" + s.loc + "]" : "");
+  for (const s of seqs) md += "| " + s.key + " | " + seqLbl(s) + " | " + (s.ing == null ? "-" : s.ing) + " | " + (s.lt == null ? "-" : s.lt) + " | " + (s.cr == null ? "-" : s.cr + "%") + " |\n";
   const u = w.unidentified || { ing: 0, lt: 0 };
   md += "\nnote: outside these sequences = " + u.ing + " contacts / " + u.lt + " LT (other workflows or manual sends).\n\n";
   const ins = w.insights;
@@ -1060,7 +1339,7 @@ function perfMd(snap: any, win: string): string {
   }
   for (const s of (w.sequences || [])) {
     const rows = ((w.msgs || {})[s.key] || []).slice().sort((a: any, b: any) => a.pos - b.pos);
-    md += "## perf.messages." + s.key + " [item: message-set] — " + s.label + "\n";
+    md += "## perf.messages." + s.key + " [item: message-set] — " + seqLbl(s) + "\n";
     if (!rows.length) { md += "(no messages with 5+ sends in this window)\n\n"; continue; }
     md += "| sms# | message | sent | responses | resp% | LT | LT% | opt_out | opt_out% |\n|--:|---|--:|--:|--:|--:|--:|--:|--:|\n";
     for (const m of rows) {
@@ -1336,7 +1615,8 @@ const GEN_VERTICALS: Record<string, GenVertical> = {
       ["free", "no upfront fees"],
       ["guaranteed / pre-approved", "you may qualify"],
     ],
-    focus: ["cc"],
+    // cc = la de GHL 1 (histórico hasta el 26/10); cc_ghl2 = la viva, en GHL 2.
+    focus: ["cc", "cc_ghl2"],
     brandKeys: ["brandvoice_cc"],
   },
 };
@@ -1764,69 +2044,95 @@ function uniqueOf(base: string, taken: Set<string>, sep: string, max: number): s
 async function readWorkflowRows() {
   return await withDb(async (c) => {
     const r = await c.queryObject<any>(
-      "select key,label,tags,ghl_id,sort from sms_analytics.workflows order by sort, key");
+      "select key,label,tags,ghl_id,sort,location from sms_analytics.workflows order by sort, key");
     return r.rows || [];
   });
 }
 
-// Lista los workflows de GHL marcando cuáles ya se están midiendo, y para los que
-// no, el tag exacto que habría que ponerles. El match es por id; el nombre solo se
-// usa para las 3 secuencias viejas, que se dieron de alta antes de guardar el id.
+// Lista los workflows de GHL de TODAS las locations, marcando cuáles ya se están
+// midiendo, y para los que no, el tag exacto que habría que ponerles. El match es
+// por id; el nombre solo se usa para las 3 secuencias viejas, que se dieron de
+// alta antes de guardar el id (y son de GHL 1). Los tags son de cada location, así
+// que la colisión de tags se mira solo dentro de la misma.
 async function ghlWorkflows(cfg: Record<string, string>) {
-  const d = await gget(BASE + "/workflows/?locationId=" + cfg.ghl_location, cfg.ghl_api_key);
-  const list = d?.workflows ?? [];
-  if (!list.length) return { error: "GHL no devolvió workflows (¿token o location?)" };
+  const all = locsOf(cfg);
+  const locs = all.filter((l) => l.key);
+  const lists = await Promise.all(locs.map(async (l) => {
+    const d = await gget(BASE + "/workflows/?locationId=" + l.id, l.key);
+    return { l, list: (d?.workflows ?? []) as any[] };
+  }));
+  const locStatus = all.map((l) => {
+    const got = lists.find((x) => x.l.id === l.id);
+    return { id: l.id, label: l.label, ok: !!(got && got.list.length),
+      error: !l.key ? "falta ghl_api_key" + (l.n === 1 ? "" : "_" + l.n) + " en sms_analytics.config"
+           : (!got || !got.list.length ? "GHL no devolvió workflows (¿token o location?)" : null) };
+  });
+  if (!lists.some((x) => x.list.length)) return { error: "GHL no devolvió workflows (¿token o location?)", locations: locStatus };
 
+  const primary = primaryLoc(cfg);
   const rows = await readWorkflowRows();
   const byId: Record<string, any> = {};
   const byLabel: Record<string, any> = {};
-  const takenTags = new Set<string>();
+  const takenTags: Record<string, Set<string>> = {};
   for (const r of rows) {
+    const loc = r.location || primary;
     if (r.ghl_id) byId[r.ghl_id] = r;
-    byLabel[deaccent(r.label).replace(/[^a-z0-9]+/g, "")] = r;
-    for (const t of splitTags(r.tags)) takenTags.add(t);
+    byLabel[loc + "|" + deaccent(r.label).replace(/[^a-z0-9]+/g, "")] = r;
+    (takenTags[loc] || (takenTags[loc] = new Set<string>()));
+    for (const t of splitTags(r.tags)) takenTags[loc].add(t);
   }
 
-  const out = list.map((w: any) => {
-    const hit = byId[w.id] || byLabel[deaccent(w.name).replace(/[^a-z0-9]+/g, "")] || null;
-    const slug = tagFromName(w.name);
-    return {
-      id: w.id,
-      name: w.name,
-      status: w.status || "",
-      updatedAt: w.updatedAt || w.createdAt || null,
-      tracked: !!hit,
-      key: hit ? hit.key : null,
-      tag: hit ? (splitTags(hit.tags)[0] || null)
-               : (slug ? uniqueOf(TAG_PREFIX + slug, takenTags, " ", TAG_MAX) : null),
-      branchTags: BRANCH_TAGS,
-    };
-  }).sort((a: any, b: any) =>
+  const out: any[] = [];
+  for (const { l, list } of lists) {
+    for (const w of list) {
+      const hit = byId[w.id] || byLabel[l.id + "|" + deaccent(w.name).replace(/[^a-z0-9]+/g, "")] || null;
+      const slug = tagFromName(w.name);
+      out.push({
+        id: w.id,
+        name: w.name,
+        location: l.id,
+        loc: l.label,
+        status: w.status || "",
+        updatedAt: w.updatedAt || w.createdAt || null,
+        tracked: !!hit,
+        key: hit ? hit.key : null,
+        tag: hit ? (splitTags(hit.tags)[0] || null)
+                 : (slug ? uniqueOf(TAG_PREFIX + slug, takenTags[l.id] || new Set<string>(), " ", TAG_MAX) : null),
+        branchTags: BRANCH_TAGS,
+      });
+    }
+  }
+  out.sort((a: any, b: any) =>
     (b.tracked ? 1 : 0) - (a.tracked ? 1 : 0) ||
     (a.status === "published" ? 0 : 1) - (b.status === "published" ? 0 : 1) ||
-    String(a.name).localeCompare(String(b.name)));
+    String(a.name).localeCompare(String(b.name)) ||
+    String(a.loc).localeCompare(String(b.loc)));
 
-  return { workflows: out, branchTags: BRANCH_TAGS };
+  return { workflows: out, branchTags: BRANCH_TAGS, locations: locStatus };
 }
 
 // Da de alta la secuencia. Devuelve SIEMPRE el tag que quedó guardado (no el
 // sugerido): si otro alta se metió en el medio, la instrucción que ve el usuario
-// es la que de verdad va a clasificar.
+// es la que de verdad va a clasificar. `location` es la del workflow; un pedido
+// sin ella (dashboard viejo) es de GHL 1, la única que había.
 async function workflowAdd(cfg: Record<string, string>, body: any) {
   const id = String(body?.id || "").trim();
   const name = String(body?.name || "").trim();
   if (!id || !name) return { error: "falta el workflow (id y name)" };
+  const location = String(body?.location || "").trim() || primaryLoc(cfg);
+  const loc = activeLocs(cfg).find((l) => l.id === location);
+  if (!loc) return { error: "la location " + location + " no está configurada con key en sms_analytics.config" };
 
   const rows = await readWorkflowRows();
   const existing = rows.find((r: any) => r.ghl_id === id);
   if (existing) {
-    return { already: true, key: existing.key, label: existing.label,
+    return { already: true, key: existing.key, label: existing.label, location: existing.location, loc: locLabel(cfg, existing.location),
       tag: splitTags(existing.tags)[0] || "", branchTags: BRANCH_TAGS };
   }
 
   const takenKeys = new Set<string>(rows.map((r: any) => r.key));
   const takenTags = new Set<string>();
-  for (const r of rows) for (const t of splitTags(r.tags)) takenTags.add(t);
+  for (const r of rows) if ((r.location || primaryLoc(cfg)) === loc.id) for (const t of splitTags(r.tags)) takenTags.add(t);
 
   const baseKey = keyFromName(name);
   const baseTag = tagFromName(name);
@@ -1837,12 +2143,12 @@ async function workflowAdd(cfg: Record<string, string>, body: any) {
 
   await withDb(async (c) => {
     await c.queryArray(
-      `insert into sms_analytics.workflows(key,label,keywords,tags,ghl_id,sort)
-       values ($1,$2,'',$3,$4,(select coalesce(max(sort),100)+10 from sms_analytics.workflows))`,
-      [key, name, tag, id]);
+      `insert into sms_analytics.workflows(key,label,keywords,tags,ghl_id,sort,location)
+       values ($1,$2,'',$3,$4,(select coalesce(max(sort),100)+10 from sms_analytics.workflows),$5)`,
+      [key, name, tag, id, loc.id]);
   });
   BOOT = null; // que el próximo request relea WF con la secuencia nueva adentro
-  return { key, label: name, tag, branchTags: BRANCH_TAGS };
+  return { key, label: name, location: loc.id, loc: loc.label, tag, branchTags: BRANCH_TAGS };
 }
 
 // Deja de medirla. No borra nada de cohort/msg_events: si se vuelve a dar de alta
@@ -2801,7 +3107,7 @@ Deno.serve(async (req) => {
   // Config + workflows en UNA sola conexión, memoizados mientras viva el isolate.
   let cfg: Record<string, string>;
   try { cfg = await boot(); } catch (e) { return json({ error: "db/config: " + String(e) }, 500); }
-  if (!WF.length) WF = WF_FALLBACK;
+  if (!WF.length) WF = WF_FALLBACK.map((w) => ({ ...w, location: primaryLoc(cfg) }));
 
   // App ABIERTA: no hay clave de operador. Cualquiera con el link puede ejecutar TODAS las
   // acciones (incluidas las que mutan la base o gastan API de GHL/Anthropic). El link es la
@@ -2809,7 +3115,7 @@ Deno.serve(async (req) => {
   void token;
 
   try {
-    if (action === "seed") return json(await seed(cfg));
+    if (action === "seed") return json(await seed(cfg, url.searchParams.get("loc")));
     if (action === "refresh") return json(await refresh(cfg));
     if (action === "markwon") {
       const r = await markwon(cfg);
@@ -2871,7 +3177,7 @@ Deno.serve(async (req) => {
       return json(await work(cfg, budget));
     }
     if (action === "build") return json(await build(cfg));
-    if (action === "status") return json(await status());
+    if (action === "status") return json(await status(cfg));
     if (action === "data") {
       const r = await withDb(async (c) => {
         const q = await c.queryObject<{ data: any; created_at: string }>(

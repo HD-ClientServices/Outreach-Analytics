@@ -73,6 +73,7 @@ tr.can{cursor:pointer}
 /* Ramas adivinadas por texto en vez de leídas del tag: sin esto se ven igual de
    sólidas que las medidas, y el problema se hereda sin que nadie lo note. */
 .chip-warn{background:#fdf3e3;color:var(--amber)}
+.chip-loc{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;color:var(--foreground)}
 .srcrow td{padding-top:9px;padding-bottom:11px}
 .brsrc{font-size:12px;line-height:1.55;color:var(--muted-2);padding-left:20px}
 .brsrc.src-warn{color:var(--amber)}
@@ -268,6 +269,8 @@ tr.can{cursor:pointer}
 .wf-group{position:sticky;top:0;z-index:1;padding:7px 13px;background:var(--card);border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
 .wf-group+.wf-item{border-top:none}
 .wf-st{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-2);white-space:nowrap}
+.wf-loc{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;color:var(--foreground);background:var(--card);border-radius:5px;padding:2px 6px;white-space:nowrap}
+.wf-warn{font-size:12.5px;color:var(--amber);margin-top:8px}
 .wf-on{font-size:10.5px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--green-soft);color:var(--green);white-space:nowrap}
 .wf-empty{padding:16px 13px;font-size:13px;color:var(--muted-2)}
 /* instrucciones */
@@ -729,7 +732,11 @@ function genCopyBox(el){
    del tag, que lo elige el sistema (si el usuario lo escribe distinto, no
    clasifica). El alta recién ocurre al confirmar — un click en la lista solo
    muestra qué habría que configurar. */
-var WFS=null, WFQ="", WFSEL=null, WFDONE=null, WFBUSY=false;
+var WFS=null, WFQ="", WFSEL=null, WFDONE=null, WFBUSY=false, WFLOCS=[];
+// Con una sola location el nombre alcanza; con dos, el mismo workflow puede
+// existir en las dos (el "PARTNER SEQUENCE - CREDIT CARD" de GHL 1 es un
+// borrador, el de GHL 2 es el vivo) y la location es lo que los distingue.
+function wfMulti(){ return WFLOCS.filter(function(l){return l.ok}).length>1 }
 
 function wfToggle(){
   var el=document.getElementById("wfPanel");
@@ -738,7 +745,8 @@ function wfToggle(){
   if(WFS){ wfRender(); return; }
   el.innerHTML='<div class="wf-panel"><div class="sub" style="margin-top:0"><span class="spin"></span>Reading your workflows from GoHighLevel…</div></div>';
   fetch(EP+"?action=ghl_workflows").then(function(r){return r.json()}).then(function(d){
-    if(d.error){ el.innerHTML='<div class="gen-err">'+esc(d.error)+'</div>'; return; }
+    WFLOCS=d.locations||[];
+    if(d.error){ el.innerHTML='<div class="gen-err">'+esc(d.error)+'</div>'+wfLocWarn(); return; }
     WFS=d.workflows||[]; wfRender();
   }).catch(function(e){ el.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
 }
@@ -753,6 +761,13 @@ function wfSort(){
   });
 }
 function wfSearch(v){ WFQ=v; wfList(); }
+// Una location configurada que no se pudo leer (falta su key, token vencido) no
+// puede pasar en silencio: sus workflows simplemente no aparecerían en la lista.
+function wfLocWarn(){
+  return WFLOCS.filter(function(l){return !l.ok}).map(function(l){
+    return '<div class="wf-warn">'+esc(l.label)+': '+esc(l.error||"not readable")+' — its workflows are not listed.</div>';
+  }).join("");
+}
 function wfPick(id){
   var w=(WFS||[]).filter(function(x){return x.id==id})[0];
   if(!w) return;
@@ -765,7 +780,9 @@ function wfRender(){
     '<div class="wf-panel">'
     + '<div class="wf-h">Add a sequence to measure</div>'
     + '<div class="wf-sub">Pick the GoHighLevel workflow whose messages you want to track. '
-    + n+' of '+((WFS||[]).length)+' workflows are being measured today.</div>'
+    + n+' of '+((WFS||[]).length)+' workflows are being measured today'
+    + (wfMulti()?', across '+WFLOCS.filter(function(l){return l.ok}).map(function(l){return esc(l.label)}).join(' and '):'')+'.</div>'
+    + wfLocWarn()
     + '<input class="wf-search" id="wfQ" placeholder="Search workflows…" value="'+esc(WFQ)+'" oninput="wfSearch(this.value)">'
     + '<div class="wf-list" id="wfList"></div>'
     + '<div id="wfSetup"></div>'
@@ -777,7 +794,8 @@ function wfRender(){
 function wfList(){
   var host=document.getElementById("wfList"); if(!host) return;
   var q=WFQ.trim().toLowerCase();
-  var rows=(WFS||[]).filter(function(w){ return !q || String(w.name).toLowerCase().indexOf(q)>=0 });
+  var rows=(WFS||[]).filter(function(w){
+    return !q || String(w.name).toLowerCase().indexOf(q)>=0 || String(w.loc||"").toLowerCase().indexOf(q)>=0 });
   if(!rows.length){ host.innerHTML='<div class="wf-empty">No workflow matches “'+esc(WFQ)+'”.</div>'; return; }
   // Las que ya se miden van arriba y con su propio encabezado: es el bloque que
   // se busca para tocar algo, no los 145 workflows que nunca se van a medir.
@@ -791,6 +809,7 @@ function wfList(){
     }
     H+='<div class="wf-item'+(WFSEL&&WFSEL.id==w.id?' on':'')+(t?' done':'')+'" onclick="wfPick(\''+esc(w.id)+'\')">'
       + '<span class="nm">'+esc(w.name)+'</span>'
+      + (wfMulti()&&w.loc?'<span class="wf-loc">'+esc(w.loc)+'</span>':'')
       + (t?'<span class="wf-on">measuring</span>':'<span class="wf-st">'+esc(w.status||'')+'</span>')
       + '</div>';
   });
@@ -844,7 +863,7 @@ function wfSetup(){
 
   var H='<div class="wf-setup">';
   if(live) H+='<div class="wf-ok">Now measuring this sequence ✓</div>';
-  H+='<div class="wf-name">'+esc(w.name)+'</div>';
+  H+='<div class="wf-name">'+esc(w.name)+(wfMulti()&&w.loc?' <span class="wf-loc">'+esc(w.loc)+'</span>':'')+'</div>';
   if(!tag){
     H+='<div class="wf-sub" style="margin-top:10px">This workflow\'s name has no letters or numbers to build a tag from — rename it in GoHighLevel and reopen this panel.</div></div>';
     host.innerHTML=H; return;
@@ -894,7 +913,7 @@ function wfAdd(){
   var w=WFSEL, b=document.getElementById("wfAddBtn");
   WFBUSY=true; if(b){b.disabled=true;b.textContent="Adding…";}
   fetch(EP+"?action=workflow_add",{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({id:w.id,name:w.name})})
+    body:JSON.stringify({id:w.id,name:w.name,location:w.location})})
     .then(function(r){return r.json()}).then(function(d){
       WFBUSY=false;
       if(d.error){ if(b){b.disabled=false;b.textContent="Start measuring it";} wfMsg(esc(d.error),true); return; }
@@ -932,8 +951,16 @@ function bar(v,mx,col){
 }
 function W(){return (DATA&&DATA.windows&&DATA.windows[ST.win])||null}
 function seqName(k){
-  var w=W(); if(w){var s=(w.sequences||[]).filter(function(x){return x.key==k})[0]; if(s&&s.label) return s.label;}
+  var w=W(); if(w){var s=(w.sequences||[]).filter(function(x){return x.key==k})[0];
+    if(s&&s.label) return s.label+(seqMultiLoc()&&s.loc?' · '+s.loc:'');}
   return k;
+}
+// Con dos locations la misma secuencia puede estar en las dos (Partner CC vivió
+// en GHL 1 hasta el 26/10 y desde el 27/10 vive en GHL 2): cada fila dice de cuál es.
+function seqMultiLoc(){
+  var w=W(), seen={}, n=0;
+  ((w&&w.sequences)||[]).forEach(function(s){ if(s.loc&&!seen[s.loc]){seen[s.loc]=1;n++} });
+  return n>1;
 }
 
 function render(){
@@ -961,7 +988,8 @@ function render(){
   updateStamp();
   var u=w.unidentified||{ing:0,lt:0};
   document.getElementById("foot").innerHTML="Source: GoHighLevel API v2 (read-only) · sms_analytics schema<br>"
-    +"Outside the sequences being measured: "+nf(u.ing)+" contacts · "+nf(u.lt)+" LT (other workflows or manual sends)";
+    +"Outside the sequences being measured: "+nf(u.ing)+" contacts · "+nf(u.lt)+" LT (other workflows or manual sends)"
+    +(w.dupes?"<br>"+nf(w.dupes)+" contacts not counted again: same phone as another contact (typically one in each GoHighLevel location) — the person counts once, where they entered first":"");
 }
 // ---- AI Inside: primer componente de Performance. La IA analiza los mejores y peores mensajes.
 // La narrativa se sirve de 3 fuentes, en orden: (1) horneada en el snapshot (insights.ai, ABIERTA,
@@ -1069,13 +1097,15 @@ function t1(){
   rows.forEach(function(r){ r._cr = (r.ing ? 100*r.lt/r.ing : null); }); // CR crudo (2 decimales)
   rows.sort(function(a,b){return (b._cr==null?-1:b._cr)-(a._cr==null?-1:a._cr)});
   var mx=Math.max.apply(null,rows.map(function(r){return r._cr||0}).concat([0.0001]));
+  var multi=seqMultiLoc();
   document.getElementById("t1").innerHTML=rows.map(function(s){
     var small=s.ing!=null&&s.ing<50?'<span class="chip">small sample</span>':'';
     // Solo tiene sentido desplegar si hay mas de una rama que comparar.
     var brs=(s.branches||[]).filter(function(b){return b.branch&&b.branch!="-"});
     var can=brs.length>1, open=can&&EXP[s.key];
+    var loc=multi&&s.loc?'<span class="chip chip-loc">'+esc(s.loc)+'</span>':'';
     var h='<tr'+(can?' class="can" onclick="toggleSeq(\''+s.key+'\')"':'')+'>'
-      +'<td><div class="seqname">'+esc(s.label)+small+tagChip(s)
+      +'<td><div class="seqname">'+esc(s.label)+loc+small+tagChip(s)
       +(can?'<span class="caret">'+(open?"▾":"▸")+'</span>':'')+'</div></td>'
       +'<td class="num">'+nf(s.lt)+'</td><td class="num">'+nf(s.ing)+'</td><td>'+bar(s._cr,mx)+'</td></tr>';
     if(open){

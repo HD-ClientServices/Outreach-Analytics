@@ -19,10 +19,41 @@ Todo corre en Supabase (proyecto `voivhkugeepawdxoubgx` · *Outreach Analytics*)
 `sms_analytics`. Nada depende de una máquina local.
 
 ```
-GHL API v2 ──▶ edge function `outreach-analytics` ──▶ sms_analytics.* ──▶ dashboard HTML
-                        ▲
-                   pg_cron + pg_net
+GHL 1 ─┐
+       ├─ API v2 ──▶ edge function `outreach-analytics` ──▶ sms_analytics.* ──▶ dashboard HTML
+GHL 2 ─┘                        ▲
+                           pg_cron + pg_net
 ```
+
+### Dos locations de GHL
+
+Desde el 6/11/2026 la app lee **las dos locations** de GoHighLevel, cada una con su key:
+
+| | Location | Config | Qué vive ahí |
+|---|---|---|---|
+| GHL 1 | `NXZFG9aQz6r1UXzZoedy` | `ghl_location` + `ghl_api_key` | MCA (Cold Blast, Defaults & Declined) y CC hasta el 26/10 |
+| GHL 2 | `oFkuULV6csxWj4T6RdT6` | `ghl_location_2` + `ghl_api_key_2` | CC desde el 27/10 ("PARTNER SEQUENCE - CREDIT CARD") |
+
+Hasta ahí solo se leía GHL 1, y como todo lead de tarjeta pasó a GHL 2 el 27/10, el dashboard
+mostraba **0 contactos entrando a la secuencia de CC** en 7 días: un A/B test de esa secuencia
+no se podía medir. Una tercera location es `ghl_location_3` + `ghl_api_key_3`, sin tocar código.
+
+- **Cada fila sabe de qué location es** (`workflows`, `cohort`, `msg_events`). Un contacto se
+  clasifica solo contra los workflows de su location: GHL 1 y GHL 2 tienen los dos el tag
+  `secuencia partner cc` y no se pisan.
+- **El cupo de 100 req/10s es por location**, así que se cuenta por key (`ghlSlot()`, con margen
+  de 90 porque el token de GHL 1 lo comparte el producto Intro) y las locations se recorren en
+  paralelo: dos tardan lo mismo que una.
+- **Una persona cuenta una vez.** La rotación de tokens dejó ~1.460 teléfonos con un contacto en
+  cada location (sep–nov). `build()` arma `cohort_u`, un contacto por teléfono: el que está en
+  una secuencia medida le gana a uno `none`, y entre ésos el que entró **primero** (igual que una
+  re-entrada en un mismo contacto, que tampoco es un ingreso nuevo). El LT es de la persona: si
+  cualquiera de sus contactos llegó a LT, cuenta para el que quedó. Para el A/B test de GHL 2 eso
+  significa que un lead que ya recibió la secuencia en GHL 1 no entra como nuevo a la rama A o B.
+  El dashboard dice cuántos contactos se juntaron, al pie.
+- **El LT sale igual en las dos**: etapa "Lead Ganado (+60s)" de un pipeline `*OPENING*`. En
+  GHL 2 eso es CENTURY OPENING; AI OPENING no tiene esa etapa (su "Transferido" no cuenta),
+  igual que en GHL 1.
 
 ### El problema que resuelve el diseño
 
@@ -32,20 +63,22 @@ al contacto apenas entra, y ese tag dice a qué secuencia pertenece toda su conv
 (El histórico previo a los tags se atribuyó comparando el **primer SMS outbound** contra el
 SMS 1 de cada workflow; para las ramas ese respaldo sigue vivo en `branchOf()`.)
 
-Además la API limita a 100 req/10s: bajar ~9.500 contactos son ~40 min, y una edge function
-muere a los ~150s. Por eso el pipeline es **por lotes**, empujado por cron.
+Además la API limita a 100 req/10s **por location**: bajar ~9.500 contactos son ~40 min, y una
+edge function muere a los ~150s. Por eso el pipeline es **por lotes**, empujado por cron. Con dos
+locations la regla de los 150s no cambia: cada enumeración corta a los 105s
+(`ENUM_DEADLINE_MS`) y corren en paralelo, no una detrás de la otra.
 
 ### Tablas
 
 | Tabla | Qué guarda |
 |---|---|
-| `config` | `ghl_api_key` (read-only), `ghl_location`, `dash_token`, `anthropic_api_key`, `retell_api_key`, `deepgram_api_key`. **Los secretos viven acá, no en el código.** |
-| `cohort` | Un registro por contacto (9.508). `entered_at` = fecha del 1er SMS = ingreso real a la secuencia. Es el **denominador**. |
-| `msg_events` | Un registro por SMS enviado (220.649), con fecha, posición en la cadencia, si tuvo respuesta y si derivó en LT. |
+| `config` | `ghl_api_key` (read-only) + `ghl_location` = GHL 1; `ghl_api_key_2` + `ghl_location_2` = GHL 2; `last_refresh_ms` / `last_refresh_ms_2` (hasta dónde se leyó cada una); `dash_token`, `anthropic_api_key`, `retell_api_key`, `deepgram_api_key`. **Los secretos viven acá, no en el código.** Una location sin key se ignora y `?action=status` lo avisa. |
+| `cohort` | Un registro por contacto (9.508). `entered_at` = fecha del 1er SMS = ingreso real a la secuencia. Es el **denominador**. `location` = de qué location se baja; `phone_key` = hash del teléfono para juntar a la misma persona entre locations (`''` = sin teléfono, `null` = procesada antes de que existiera). |
+| `msg_events` | Un registro por SMS enviado (220.649), con fecha, posición en la cadencia, si tuvo respuesta, si derivó en LT y de qué `location` salió. |
 | `templates` | Diccionario `tmpl_key → texto`, para no repetir el texto en cada evento. |
 | `snapshots_v2` | Salida del `build`: las 3 ventanas precalculadas. |
 | `run` | Estado del backfill. |
-| `workflows` | Una fila por secuencia medida: `key`, `label`, `tags` (los tags de GHL que la marcan), `ghl_id`, `sort`. **Es el registro que da de alta una secuencia** — ver [Sumar una secuencia](#sumar-una-secuencia-nueva). |
+| `workflows` | Una fila por secuencia medida: `key`, `label`, `tags` (los tags de GHL que la marcan), `ghl_id`, `sort`, `location`. **Es el registro que da de alta una secuencia** — ver [Sumar una secuencia](#sumar-una-secuencia-nueva). `cc` es la de CC en GHL 1 (histórico, se vacía hacia el 28/11) y `cc_ghl2` la viva, en GHL 2. |
 | `persona_config` · `persona_pipeline` | Una fila por vertical (`mca`, `cc`, …) y sus pipelines de Closing. **La selección de pipelines de la interfaz vive acá**, no en el código. |
 | `persona_won_opp` | Una fila por oportunidad ganada, con `extract` = la ficha del comprador. |
 | `call_transcript` | Cola **y** almacén de transcripciones. `unique(message_id, rec_index)`. |
@@ -62,17 +95,17 @@ Dos niveles de acceso (ver [Seguridad](#seguridad)):
 
 | Acción | Nivel | Qué hace |
 |---|---|---|
-| `?action=seed` | operador | Arma la cohorte desde `opportunities/search` (30d). **Trunca `cohort` y `msg_events`.** |
+| `?action=seed` | operador | Arma la cohorte con las conversaciones de los últimos 30d de cada location. **Trunca `cohort` y `msg_events`.** `&loc=<location id>` re-siembra solo esa location y deja las demás intactas. |
 | `?action=work&ms=100000` | operador | Procesa una tanda acotada por tiempo. Devuelve `{processed, remaining}`. Al llegar a 0 dispara `build` solo. |
 | `?action=build` | operador | Recalcula las 3 ventanas e inserta en `snapshots_v2`. |
-| `?action=refresh` | operador | Actualización incremental on-demand. |
+| `?action=refresh` | operador | Actualización incremental on-demand, location por location. Una location **sin filas** en la cohorte (la primera vez que se configura) se siembra entera en el mismo request. |
 | `?action=generate` / `insight_ai` | operador | Llaman a la API de Anthropic (**gastan plata**). |
-| `?action=status` | lectura | Progreso del backfill. |
+| `?action=status` | lectura | Progreso del backfill, total y por location (`locations[]`: total, done, pending, failed y si le falta la key). |
 | `?action=data` | lectura | Último snapshot. Lo consume el dashboard. |
 | `?action=personas` / `persona_data` / `persona_status` | lectura | Verticales configuradas, el documento vigente y el estado de una corrida. |
 | `?action=ghl_pipelines` | lectura | Los pipelines de GHL, para la UI de selección. |
-| `?action=ghl_workflows` | lectura | Los workflows de GHL, marcando cuáles ya se miden y con qué tag. Lo consume "+ Add a sequence". |
-| `?action=workflow_add` | operador | POST `{id,name}` → da de alta la secuencia y devuelve el tag exacto que hay que poner en GHL. |
+| `?action=ghl_workflows` | lectura | Los workflows de **todas** las locations (cada uno con `location`/`loc`), marcando cuáles ya se miden y con qué tag. Lo consume "+ Add a sequence". `locations[]` dice si alguna no se pudo leer. |
+| `?action=workflow_add` | operador | POST `{id,name,location}` → da de alta la secuencia en esa location y devuelve el tag exacto que hay que poner en GHL. Sin `location`, GHL 1. |
 | `?action=workflow_remove` | operador | POST `{key}` → deja de medirla. No borra `cohort`/`msg_events`. |
 | `?action=persona_save` | operador | Guarda una vertical y sus pipelines. Crear una nueva = POST con `key` nuevo. |
 | `?action=persona_scan&key=` | operador | Barre los WON de esos pipelines y encola sus llamadas. `&dry=1` no escribe. **Gratis.** |
@@ -95,13 +128,22 @@ select cron.alter_job(job_id := <id>, active := false);
 ```
 
 `work` es **idempotente y seguro ante solapamiento**: reclama filas con
-`for update skip locked` y borra los eventos previos del contacto antes de insertar.
+`for update skip locked` y borra los eventos previos del contacto antes de insertar. Cada
+contacto se baja de su location con la key de esa location; un lote mezcla locations, así que
+mientras una espera su cupo la otra sigue. Si GHL no contesta, el contacto queda pendiente y se
+reintenta (hasta 3 veces) en vez de darse por procesado sin secuencia, que es lo que pasaba antes.
+
+Para sumar **una location nueva** no hace falta un seed: cargar `ghl_location_n` + `ghl_api_key_n`
+en `config` y apretar **↻ Refresh**. Como esa location no tiene filas, el refresh la siembra
+entera y el cron la drena.
 
 ### Sumar una secuencia nueva
 
-Desde el dashboard: **Performance → “+ Add a sequence”** lista los workflows de la location,
-y al elegir uno muestra los tags exactos que hay que configurar en GHL. Sumar una secuencia
-**ya no es tocar código**: es una fila en `workflows`.
+Desde el dashboard: **Performance → “+ Add a sequence”** lista los workflows de **las dos
+locations** (con su `GHL 1` / `GHL 2` al lado: el "PARTNER SEQUENCE - CREDIT CARD" existe en las
+dos, y el vivo es el de GHL 2), y al elegir uno muestra los tags exactos que hay que configurar en
+GHL. Sumar una secuencia **ya no es tocar código**: es una fila en `workflows`, con su `location`.
+Los tags son de cada location: el que se sugiere solo tiene que ser único dentro de la suya.
 
 El contrato son dos tags, y el nombre lo elige el sistema — si se escribe distinto, no clasifica:
 
@@ -117,7 +159,13 @@ trae tags de dos secuencias, es la columna `sort` — la misma que ordena la lis
 Si el workflow le **saca** el tag al terminar, el tag de fin también tiene que estar en
 `workflows.tags`: la clasificación lee los tags del contacto al procesarlo, y un contacto
 que ya terminó cae en `none` y pierde sus eventos. Pasaba con el Cold Blast (`ended fcb`)
-y con Partner CC (`debtmd sequence finished`).
+y con Partner CC (`debtmd sequence finished` en GHL 1, **`cc sequence finished` en GHL 2**). La
+UI no puede adivinar el tag de fin: si el workflow lo cambia, hay que sumarlo a mano a la fila.
+
+La secuencia de CC de GHL 2 (`cc_ghl2`) **no tiene copies en `OFFICIAL`, a propósito**: su tabla
+de mensajes muestra lo que salió bajo el tag, así la rama B del A/B test aparece sola en vez de
+quedar filtrada contra el guion de la A. Para que el A/B se vea partido, cada rama del split del
+workflow de GHL 2 tiene que poner `rama a` / `rama b` (hoy esos tags no existen en GHL 2).
 
 Dos consecuencias que conviene decir en voz alta:
 
@@ -311,6 +359,28 @@ cohorte y solo 15 días.)
 
 Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
 
+### 4. Buyer Persona sigue leyendo solo GHL 1
+
+`persona_scan`, la transcripción de audios de GHL y `?action=ghl_pipelines` usan `ghl_location` +
+`ghl_api_key`. Los WON de Century desde el 27/10 viven en GHL 2, así que la persona de Credit Card
+no los ve. Es el mismo cambio (recorrer `activeLocs()`), pero en otro pipeline.
+
+### 5. Lo que deja la segunda location
+
+- **El primer refresh después del deploy es pesado, una sola vez:** siembra GHL 2 (todos sus
+  contactos con conversación en los últimos 30 días) y re-encola las filas de GHL 1 de
+  secuencias medidas que todavía no tienen `phone_key` (las procesó la versión anterior), para
+  que la deduplicación las alcance. El cron lo drena en lotes; mientras tanto el dashboard sigue
+  mostrando el snapshot anterior.
+- **La fila `cc` (GHL 1) queda en Performance** con 0 ingresos en 7 días: es el histórico hasta el
+  26/10 y se vacía sola cuando sus contactos salgan de la ventana (~28/11). Se puede sacar con
+  "Stop measuring" después.
+- **Si una location deja de contestar** (token rotado, key vencida), `markwon` no le pone sus LT
+  en 0: solo resetea las locations que contestaron. `?action=status` muestra `failed` por
+  location.
+- La deduplicación usa el teléfono **hasheado**, no a la vista. No es anonimización: un teléfono
+  de 10 dígitos se recupera por fuerza bruta.
+
 ---
 
 ## Crons
@@ -373,7 +443,7 @@ Modelo de acceso (rediseñado 21/07/2026 — el token salió de la URL del dashb
   y lo manda por `?token=` **solo** en esas llamadas — nunca vive en la URL de la página ni en el
   JS servido. Así, quien encuentre el link puede mirar pero no puede quemar la cuota de API.
 - Los **crons** mandan el `dash_token` server-side (`net.http_post`), siguen funcionando igual.
-- Token de GHL y key de Anthropic **read-only/secretas**, en `sms_analytics.config`.
+- Tokens de GHL (uno por location) y key de Anthropic **read-only/secretas**, en `sms_analytics.config`.
   Nunca en el código ni en el repo. Ningún endpoint las devuelve al cliente.
 - Si el link se filtra: rotar `cfg.dash_token` (corta a los operadores) y/o mover el sitio a un
   subdominio nuevo. Para privacidad real haría falta un login (no implementado, fue decisión).
