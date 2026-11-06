@@ -515,6 +515,11 @@ function byId(arr,id){ return (arr||[]).filter(function(x){return x.id==id})[0]|
    Sin prompt() ni alert(): los dialogos nativos del navegador se parecen a un
    pedido de credenciales y esta app nunca pide una. Todo pasa en el panel. */
 var PNEW=false;
+// Locations de GHL de las que salieron los pipelines. Con dos, el mismo nombre
+// aparece dos veces (hay un CENTURY CLOSING en GHL 1 y otro en GHL 2) y la
+// location es lo único que los distingue; una que no se pudo leer se avisa.
+var PLOCS=[];
+function pMultiLoc(){ return PLOCS.filter(function(l){return l.ok}).length>1 }
 
 function pToggleCfg(isNew){
   var el=document.getElementById("pCfg");
@@ -522,8 +527,9 @@ function pToggleCfg(isNew){
   PNEW=!!isNew;
   el.hidden=false;
   el.innerHTML='<div class="sub" style="margin-top:18px"><span class="spin"></span>Reading the pipelines from GoHighLevel…</div>';
-  (PIPES?Promise.resolve({pipelines:PIPES}):fetch(EP+"?action=ghl_pipelines").then(function(r){return r.json()}))
+  (PIPES?Promise.resolve({pipelines:PIPES,locations:PLOCS}):fetch(EP+"?action=ghl_pipelines").then(function(r){return r.json()}))
     .then(function(d){
+      PLOCS=d.locations||[];
       if(d.error){ el.innerHTML='<div class="gen-err">'+esc(d.error)+'</div>'; return; }
       PIPES=d.pipelines; pCfgRender();
     }).catch(function(e){ el.innerHTML='<div class="gen-err">'+esc(String(e))+'</div>'; });
@@ -549,11 +555,16 @@ function pCfgRender(){
   var cur = PNEW ? {key:"",label:"",pipelines:[],minSample:15}
                  : (pCur()||{key:ST.persona,label:ST.persona,pipelines:[],minSample:15});
   var on={}; (cur.pipelines||[]).forEach(function(p){on[p.id]=1});
+  var multi=pMultiLoc();
   var boxes=PIPES.map(function(p){
     return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:13.5px;line-height:1.4;padding:5px 0;cursor:pointer">'
       // width:auto porque `.gfield input` fuerza width:100% y estiraba el checkbox
-      + '<input type="checkbox" data-pid="'+esc(p.id)+'" data-pname="'+esc(p.name)+'"'+(on[p.id]?' checked':'')+' style="margin-top:2px;width:auto;flex:0 0 auto">'
-      + '<span style="flex:1">'+esc(p.name)+(p.closing?'':' <span style="color:var(--muted-2)">· not a closing pipeline</span>')+'</span></label>';
+      + '<input type="checkbox" data-pid="'+esc(p.id)+'" data-pname="'+esc(p.name)+'" data-loc="'+esc(p.location||"")+'"'+(on[p.id]?' checked':'')+' style="margin-top:2px;width:auto;flex:0 0 auto">'
+      + '<span style="flex:1">'+esc(p.name)+(multi&&p.loc?' <span class="wf-loc">'+esc(p.loc)+'</span>':'')
+      + (p.closing?'':' <span style="color:var(--muted-2)">· not a closing pipeline</span>')+'</span></label>';
+  }).join("");
+  var warn=PLOCS.filter(function(l){return !l.ok}).map(function(l){
+    return '<div class="wf-warn">'+esc(l.label)+': '+esc(l.error||"not readable")+' — its pipelines are not listed.</div>';
   }).join("");
   document.getElementById("pCfg").innerHTML =
     '<div class="gform" style="grid-template-columns:1fr 1fr">'
@@ -562,7 +573,7 @@ function pCfgRender(){
     + '<div class="gfield"><label>Small-sample threshold <span class="opt">(warn below this many won deals)</span></label>'
     + '<input id="pf_min" type="number" min="1" max="500" value="'+(cur.minSample||15)+'"></div>'
     + '<div class="gfield gf-wide"><label>Closing pipelines that feed this persona</label>'
-    + '<div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--background)">'+boxes+'</div></div>'
+    + '<div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--background)">'+boxes+'</div>'+warn+'</div>'
     + '<div class="gfield gf-wide gf-actions"><button class="gbtn" id="pf_save" onclick="pSave()">'+(PNEW?'Create vertical':'Save')+'</button>'
     + (PNEW?'<button class="pill" onclick="pToggleCfg()">Cancel</button>':'')
     + '<span class="ghint" id="pf_msg">Won deals in these pipelines are the evidence. Saving does not regenerate — hit ↻ Regenerate after.</span>'
@@ -574,7 +585,7 @@ function pSave(){
   var key = PNEW ? pSlug(label) : ST.persona;
   var picked=[].slice.call(document.querySelectorAll('#pCfg input[type=checkbox]'))
     .filter(function(c){return c.checked})
-    .map(function(c){return {id:c.getAttribute("data-pid"), name:c.getAttribute("data-pname")}});
+    .map(function(c){return {id:c.getAttribute("data-pid"), name:c.getAttribute("data-pname"), location:c.getAttribute("data-loc")||undefined}});
   var body={ key:key, label:label||key,
              minSample:parseInt(document.getElementById("pf_min").value)||15, pipelines:picked };
   if(PNEW) body.sort=900;

@@ -79,9 +79,9 @@ locations la regla de los 150s no cambia: cada enumeración corta a los 105s
 | `snapshots_v2` | Salida del `build`: las 3 ventanas precalculadas. |
 | `run` | Estado del backfill. |
 | `workflows` | Una fila por secuencia medida: `key`, `label`, `tags` (los tags de GHL que la marcan), `ghl_id`, `sort`, `location`. **Es el registro que da de alta una secuencia** — ver [Sumar una secuencia](#sumar-una-secuencia-nueva). `cc` es la de CC en GHL 1 (histórico, se vacía hacia el 28/11) y `cc_ghl2` la viva, en GHL 2. |
-| `persona_config` · `persona_pipeline` | Una fila por vertical (`mca`, `cc`, …) y sus pipelines de Closing. **La selección de pipelines de la interfaz vive acá**, no en el código. |
-| `persona_won_opp` | Una fila por oportunidad ganada, con `extract` = la ficha del comprador. |
-| `call_transcript` | Cola **y** almacén de transcripciones. `unique(message_id, rec_index)`. |
+| `persona_config` · `persona_pipeline` | Una fila por vertical (`mca`, `cc`, …) y sus pipelines de Closing, cada uno con su `location`. **La selección de pipelines de la interfaz vive acá**, no en el código. |
+| `persona_won_opp` | Una fila por oportunidad ganada, con `extract` = la ficha del comprador y la `location` de donde se expande. |
+| `call_transcript` | Cola **y** almacén de transcripciones. `unique(message_id, rec_index)`. `location` = de dónde se baja la grabación. |
 | `persona_doc` · `persona_run` | El documento generado (JSON + markdown) y la fase de la corrida. |
 
 > **Las ventanas 7/14/30 salen de UNA sola extracción de 30 días**, filtrando `sent_at`/`entered_at`.
@@ -103,11 +103,11 @@ Dos niveles de acceso (ver [Seguridad](#seguridad)):
 | `?action=status` | lectura | Progreso del backfill, total y por location (`locations[]`: total, done, pending, failed y si le falta la key). |
 | `?action=data` | lectura | Último snapshot. Lo consume el dashboard. |
 | `?action=personas` / `persona_data` / `persona_status` | lectura | Verticales configuradas, el documento vigente y el estado de una corrida. |
-| `?action=ghl_pipelines` | lectura | Los pipelines de GHL, para la UI de selección. |
+| `?action=ghl_pipelines` | lectura | Los pipelines de **todas** las locations (cada uno con `location`/`loc`), para la UI de selección. `locations[]` dice si alguna no se pudo leer. |
 | `?action=ghl_workflows` | lectura | Los workflows de **todas** las locations (cada uno con `location`/`loc`), marcando cuáles ya se miden y con qué tag. Lo consume "+ Add a sequence". `locations[]` dice si alguna no se pudo leer. |
 | `?action=workflow_add` | operador | POST `{id,name,location}` → da de alta la secuencia en esa location y devuelve el tag exacto que hay que poner en GHL. Sin `location`, GHL 1. |
 | `?action=workflow_remove` | operador | POST `{key}` → deja de medirla. No borra `cohort`/`msg_events`. |
-| `?action=persona_save` | operador | Guarda una vertical y sus pipelines. Crear una nueva = POST con `key` nuevo. |
+| `?action=persona_save` | operador | Guarda una vertical y sus pipelines (`{id,name,location}`; sin `location`, la que ya tenía ese pipeline o GHL 1). Crear una nueva = POST con `key` nuevo. |
 | `?action=persona_scan&key=` | operador | Barre los WON de esos pipelines y encola sus llamadas. `&dry=1` no escribe. **Gratis.** |
 | `?action=persona_transcribe&key=` | operador | Drena la cola. Retell es gratis; GHL pasa por **Deepgram (gasta)**. |
 | `?action=persona_extract&key=` | operador | Una ficha por comprador. **Gasta Anthropic** (poco, y queda cacheada). |
@@ -227,14 +227,34 @@ dato— y además se limpian en código por si el prompt no alcanzó.
 El extract vive en la **oportunidad**, no en la llamada: la unidad de una buyer persona es el
 comprador, no el audio.
 
+### Las dos locations
+
+Desde el 6/11/2026 la persona también lee **GHL 2**. Tarjeta vive ahí desde el 27/10, así que
+los WON de Century desde entonces no se veían: la vertical Credit Card tenía 2 deals.
+
+- **"⚙ Pipelines" lista los pipelines de las dos locations**, cada uno con su `GHL 1` / `GHL 2`
+  al lado: hay un CENTURY CLOSING en cada una (el de GHL 1 guarda los WON hasta el 26/10; el de
+  GHL 2, desde el 27/10). `persona_pipeline.location` guarda de cuál es cada uno.
+- **Cada paso usa la key de su location.** El barrido de WON y la expansión a llamadas leen el
+  pipeline en su location; `persona_won_opp.location` y `call_transcript.location` la heredan, y
+  la grabación se baja de esa location (la URL la lleva y la key de GHL 1 no abre las de GHL 2).
+- **Una location sin key no traba nada:** sus pipelines salen con `error` en el scan, y sus
+  grabaciones no se reclaman: quedan en `blocked` con el motivo, igual que las que frena el tope
+  de Deepgram, para que el drenado del dashboard no quede esperando algo que no puede pasar.
+- La migración `20261106210000_persona_two_locations.sql` suma el CENTURY CLOSING de GHL 2 a la
+  vertical Credit Card. **No gasta nada**: hay que correr `persona_scan` → `persona_transcribe` →
+  `persona_extract` → `persona_build` (↻ Regenerate) para que la persona lo use. Las llamadas de
+  los AI setters salen de Retell (gratis); la más larga del closer de cada deal pasa por Deepgram.
+
 ### Estado actual
 
 | Vertical | Compradores ganados | Fuente | Estado |
 |---|--:|---|---|
 | MCA | 70 leídos (de 72 ganados) | closer, GHL → Deepgram | ✅ generado · 71/71 llamadas transcriptas · 1.992 min · confianza media |
-| Credit Card | 2 | AI setter, Retell | ✅ generado, con aviso de muestra chica |
+| Credit Card | 2 | AI setter, Retell | ✅ generado, con aviso de muestra chica · sin los WON de GHL 2 todavía |
 
-⚠️ Credit Card tiene **2 deals**. Es direccional, no estadístico, y el dashboard lo dice.
+⚠️ Credit Card tiene **2 deals**, todos de GHL 1. Es direccional, no estadístico, y el dashboard lo
+dice. Los WON de Century en GHL 2 entran recién con un scan + Regenerate después del deploy.
 
 ### Validación convergente (MCA, 13/08/2026)
 
@@ -359,13 +379,7 @@ cohorte y solo 15 días.)
 
 Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
 
-### 4. Buyer Persona sigue leyendo solo GHL 1
-
-`persona_scan`, la transcripción de audios de GHL y `?action=ghl_pipelines` usan `ghl_location` +
-`ghl_api_key`. Los WON de Century desde el 27/10 viven en GHL 2, así que la persona de Credit Card
-no los ve. Es el mismo cambio (recorrer `activeLocs()`), pero en otro pipeline.
-
-### 5. Lo que deja la segunda location
+### 4. Lo que deja la segunda location
 
 - **El primer refresh después del deploy es pesado, una sola vez:** siembra GHL 2 (todos sus
   contactos con conversación en los últimos 30 días) y re-encola las filas de GHL 1 de

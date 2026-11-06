@@ -1943,14 +1943,14 @@ async function fetchT(url: string, init: RequestInit, ms = HTTP_TIMEOUT_MS): Pro
 }
 
 // ---- Lectura: configs + pipelines + estado de la cola -----------------------
-async function personas() {
+async function personas(cfg: Record<string, string>) {
   return await withDb(async (c) => {
     const cfgs = await c.queryObject<any>(
       `select key, label, headline, sort, active, min_sample, since_days
          from sms_analytics.persona_config order by sort, key`);
     const pipes = await c.queryObject<any>(
-      `select persona_key, pipeline_id, pipeline_name from sms_analytics.persona_pipeline
-        order by persona_key, pipeline_name`);
+      `select persona_key, pipeline_id, pipeline_name, location from sms_analytics.persona_pipeline
+        order by persona_key, pipeline_name, location`);
     const counts = await c.queryObject<any>(
       `select p.persona_key,
               count(*) filter (where t.status = 'queued')::bigint   as queued,
@@ -1971,7 +1971,8 @@ async function personas() {
       return {
         key: cf.key, label: cf.label, headline: cf.headline, sort: cf.sort,
         active: cf.active, minSample: cf.min_sample, sinceDays: cf.since_days,
-        pipelines: byKey(pipes.rows || [], cf.key).map((p: any) => ({ id: p.pipeline_id, name: p.pipeline_name })),
+        pipelines: byKey(pipes.rows || [], cf.key).map((p: any) => ({ id: p.pipeline_id, name: p.pipeline_name,
+          location: p.location, loc: locLabel(cfg, p.location) })),
         queue: { queued: nInt(q.queued), done: nInt(q.done), noAudio: nInt(q.no_audio),
                  failed: nInt(q.failed), short: nInt(q.short) },
         current: d ? { nCalls: d.n_calls, at: d.created_at } : null,
@@ -1980,20 +1981,33 @@ async function personas() {
   });
 }
 
-// Los pipelines de GHL, para la UI de selección. Sumar un buyer nuevo (o
-// "United Settlement Closing" cuando exista) es tildarlo acá, no tocar código.
+// Los pipelines de GHL de TODAS las locations, para la UI de selección. Sumar un
+// buyer nuevo (o "United Settlement Closing" cuando exista) es tildarlo acá, no
+// tocar código. Cada pipeline dice de qué location es: CENTURY CLOSING existe en
+// GHL 1 (los WON hasta el 26/10) y en GHL 2 (desde el 27/10).
 async function ghlPipelines(cfg: Record<string, string>) {
-  const d = await gget(BASE + "/opportunities/pipelines?locationId=" + cfg.ghl_location, cfg.ghl_api_key);
-  const pls = d?.pipelines ?? [];
-  if (!pls.length) return { error: "GHL no devolvió pipelines (¿token o location?)" };
-  return {
-    pipelines: pls.map((p: any) => ({
-      id: p.id, name: p.name,
-      closing: /closing|wins?\b/i.test(p.name || ""),
-      wonStageId: (p.stages || []).find((s: any) => /^won$|ganad/i.test((s.name || "").trim()))?.id || null,
-      stages: (p.stages || []).map((s: any) => ({ id: s.id, name: s.name })),
-    })).sort((a: any, b: any) => (b.closing ? 1 : 0) - (a.closing ? 1 : 0) || a.name.localeCompare(b.name)),
-  };
+  const all = locsOf(cfg);
+  const lists = await Promise.all(all.filter((l) => l.key).map(async (l) => {
+    const d = await gget(BASE + "/opportunities/pipelines?locationId=" + l.id, l.key);
+    return { l, pls: (d?.pipelines ?? []) as any[] };
+  }));
+  const locStatus = all.map((l) => {
+    const got = lists.find((x) => x.l.id === l.id);
+    return { id: l.id, label: l.label, ok: !!(got && got.pls.length),
+      error: !l.key ? "falta ghl_api_key" + (l.n === 1 ? "" : "_" + l.n) + " en sms_analytics.config"
+           : (!got || !got.pls.length ? "GHL no devolvió pipelines (¿token o location?)" : null) };
+  });
+  const pipelines: any[] = [];
+  for (const { l, pls } of lists) for (const p of pls) pipelines.push({
+    id: p.id, name: p.name, location: l.id, loc: l.label,
+    closing: /closing|wins?\b/i.test(p.name || ""),
+    wonStageId: (p.stages || []).find((s: any) => /^won$|ganad/i.test((s.name || "").trim()))?.id || null,
+    stages: (p.stages || []).map((s: any) => ({ id: s.id, name: s.name })),
+  });
+  if (!pipelines.length) return { error: "GHL no devolvió pipelines (¿token o location?)", locations: locStatus };
+  pipelines.sort((a: any, b: any) => (b.closing ? 1 : 0) - (a.closing ? 1 : 0) ||
+    a.name.localeCompare(b.name) || String(a.loc).localeCompare(String(b.loc)));
+  return { pipelines, locations: locStatus };
 }
 
 // ---- Alta de secuencias desde la UI ----------------------------------------
@@ -2165,7 +2179,7 @@ async function workflowRemove(body: any) {
   return n ? { ok: true, key } : { error: "no existe la secuencia " + key };
 }
 
-async function personaSave(body: any) {
+async function personaSave(cfg: Record<string, string>, body: any) {
   const key = String(body?.key || "").trim().toLowerCase();
   const label = String(body?.label || "").trim();
   if (!keyOk(key)) return { error: "key inválida (a-z, 0-9, _ y -, 2-24 caracteres)" };
@@ -2184,15 +2198,24 @@ async function personaSave(body: any) {
       [key, label, headline, sort, minSample]);
     await c.queryArray(`insert into sms_analytics.persona_run(persona_key,phase) values ($1,'idle')
                         on conflict (persona_key) do nothing`, [key]);
+    // La location de cada pipeline: la que manda la UI; si no la manda (dashboard
+    // viejo), la que ya tenía ese pipeline guardado; y si es nuevo, GHL 1.
+    const known = new Set(locsOf(cfg).map((l) => l.id));
+    const prev = await c.queryObject<{ pipeline_id: string; location: string }>(
+      `select pipeline_id, location from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
+    const prevLoc: Record<string, string> = {};
+    for (const r of prev.rows) prevLoc[r.pipeline_id] = r.location;
     // Reemplazo completo: la UI manda la lista entera, no un delta.
     await c.queryArray(`delete from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
     for (const p of pipes) {
       const pid = String(p?.id || "").trim();
       if (!pid) continue;
+      const sent = String(p?.location || "").trim();
+      const loc = known.has(sent) ? sent : (prevLoc[pid] || primaryLoc(cfg));
       await c.queryArray(
-        `insert into sms_analytics.persona_pipeline(persona_key,pipeline_id,pipeline_name)
-         values ($1,$2,$3) on conflict do nothing`,
-        [key, pid, p?.name ? String(p.name).slice(0, 120) : null]);
+        `insert into sms_analytics.persona_pipeline(persona_key,pipeline_id,pipeline_name,location)
+         values ($1,$2,$3,$4) on conflict do nothing`,
+        [key, pid, p?.name ? String(p.name).slice(0, 120) : null, loc]);
     }
     return { ok: true, key, label, pipelines: pipes.length };
   });
@@ -2295,13 +2318,17 @@ async function transcribeRetell(cfg: Record<string, string>, row: any): Promise<
 
 async function transcribeOne(cfg: Record<string, string>, row: any): Promise<TrOut> {
   if (row.source === "retell") return await transcribeRetell(cfg, row);
-  const loc = cfg.ghl_location, gkey = cfg.ghl_api_key;
-  const base = BASE + "/conversations/messages/" + row.message_id + "/locations/" + loc + "/recording";
+  // La grabación se baja de la location de la llamada, con SU key: la URL lleva
+  // la location y la key de GHL 1 no abre las de GHL 2. El claim ya deja afuera
+  // las filas de una location sin key, así que esto es solo un cinturón.
+  const loc = activeLocs(cfg).find((l) => l.id === (row.location || primaryLoc(cfg)));
+  if (!loc) return { status: "retry", err: "la location " + row.location + " no tiene key en sms_analytics.config" };
+  const base = BASE + "/conversations/messages/" + row.message_id + "/locations/" + loc.id + "/recording";
 
   // index=1 es la pata del closer en un live transfer. Si no existe (422), la
   // llamada simplemente no fue transferida: se cae al recording por defecto.
-  let audio = await gbin(base + "?index=" + row.rec_index, gkey, 3);
-  if (!audio.ok) audio = await gbin(base, gkey, 3);
+  let audio = await gbin(base + "?index=" + row.rec_index, loc.key, 3);
+  if (!audio.ok) audio = await gbin(base, loc.key, 3);
   if (!audio.ok || !audio.bytes || !audio.bytes.byteLength)
     return { status: "no_audio", err: "GHL recording " + audio.status };
   if (audio.bytes.byteLength > MAX_AUDIO_BYTES)
@@ -2364,6 +2391,11 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
     return Number(r.rows[0]?.s || 0);
   });
   const dgOpen = hasDg && usedMin < cap;
+  // Una grabación de GHL solo se puede bajar con la key de su location. Las de una
+  // location sin key no se reclaman (quedan en `blocked`, como las que frena
+  // Deepgram); las de Retell no pasan por GHL y no les importa.
+  const ghlLocs = activeLocs(cfg).map((l) => l.id);
+  const locOk = (i: number) => "(t.source <> 'ghl' or t.location = any($" + i + "::text[]))";
 
   let done = 0, failed = 0, noAudio = 0, short = 0, minutes = 0;
   const claimed = new Set<string>();
@@ -2389,9 +2421,10 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
             ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $2" : ""}
             where ${CLAIMABLE} and t.attempts < 3
               ${dgOpen ? "" : "and t.source <> 'ghl'"}
+              and ${locOk(key ? 3 : 2)}
             order by t.attempts, t.id limit $1 for update skip locked)
-          returning id, message_id, rec_index, duration_s, attempts, source, ext_id`,
-        key ? [take, key] : [take]);
+          returning id, message_id, rec_index, duration_s, attempts, source, ext_id, location`,
+        key ? [take, key, ghlLocs] : [take, ghlLocs]);
       return r.rows;
     });
     if (!batch.length) break;
@@ -2439,26 +2472,32 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
   // el mismo número para siempre y la UI reintentaba cada 600ms sin avanzar.
   // Lo que queda fuera se informa aparte, en `blocked`, para poder decirlo.
   const counts = await withDb(async (c) => {
-    const r = await c.queryObject<{ n: bigint; b: bigint }>(
+    const L = key ? 2 : 1;
+    const r = await c.queryObject<{ n: bigint; a: bigint; bl: bigint }>(
       `select
-         count(*) filter (where ${CLAIMABLE} and t.attempts < 3 ${dgOpen ? "" : "and t.source <> 'ghl'"})::bigint as n,
-         count(*) filter (where ${CLAIMABLE} and t.attempts < 3 ${dgOpen ? "and false" : "and t.source = 'ghl'"})::bigint as b
+         count(*) filter (where ${CLAIMABLE} and t.attempts < 3 ${dgOpen ? "" : "and t.source <> 'ghl'"} and ${locOk(L)})::bigint as n,
+         count(*) filter (where ${CLAIMABLE} and t.attempts < 3)::bigint as a,
+         count(*) filter (where ${CLAIMABLE} and t.attempts < 3 and not ${locOk(L)})::bigint as bl
        from sms_analytics.call_transcript t
        ${key ? "join sms_analytics.persona_pipeline p on p.pipeline_id = t.pipeline_id and p.persona_key = $1" : ""}`,
-      key ? [key] : []);
-    return { remaining: Number(r.rows[0].n), blocked: Number(r.rows[0].b) };
+      key ? [key, ghlLocs] : [ghlLocs]);
+    const n = Number(r.rows[0].n);
+    return { remaining: n, blocked: Number(r.rows[0].a) - n, blockedByLoc: Number(r.rows[0].bl) };
   });
   const remaining = counts.remaining;
-  const why = dgOpen ? null
+  const dgWhy = dgOpen ? null
     : (hasDg ? "tope diario alcanzado (" + Math.round(usedMin) + "/" + cap + " min)"
              : "falta deepgram_api_key en sms_analytics.config");
+  const locWhy = counts.blockedByLoc
+    ? counts.blockedByLoc + " de una location de GHL sin key en sms_analytics.config" : null;
+  const why = [dgWhy, locWhy].filter(Boolean).join("; ") || null;
   if (key) await setPhase(key, remaining ? "transcribing" : "extracting",
     remaining ? remaining + " llamadas en cola" : (counts.blocked ? counts.blocked + " llamadas sin transcribir: " + why : null));
 
   return { key, done, failed, noAudio, short, remaining,
     blocked: counts.blocked, blockedWhy: counts.blocked ? why : null,
     minutes: Math.round(minutes * 10) / 10, dailyMinutesUsed: Math.round(usedMin),
-    deepgram: dgOpen ? "on" : why,
+    deepgram: dgOpen ? "on" : dgWhy,
     elapsedMs: Date.now() - t0 };
 }
 
@@ -2478,40 +2517,52 @@ async function personaTranscribe(cfg: Record<string, string>, key: string | null
 async function personaScan(cfg: Record<string, string>, key: string, budgetMs: number, dry: boolean) {
   const t0 = Date.now();
   const deadline = t0 + Math.min(budgetMs, 115000);
-  const gkey = cfg.ghl_api_key, loc = cfg.ghl_location;
+  // Cada pipeline se barre en SU location, con la key de esa location; las
+  // oportunidades y sus llamadas heredan esa location.
+  const primary = primaryLoc(cfg);
+  const locs: Record<string, Loc> = {};
+  for (const l of activeLocs(cfg)) locs[l.id] = l;
 
   const pipes = await withDb(async (c) => {
-    const r = await c.queryObject<{ pipeline_id: string; pipeline_name: string | null }>(
-      `select pipeline_id, pipeline_name from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
+    const r = await c.queryObject<{ pipeline_id: string; pipeline_name: string | null; location: string }>(
+      `select pipeline_id, pipeline_name, location from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
     return r.rows;
   });
   if (!pipes.length) return { error: "la persona '" + key + "' no tiene pipelines configurados" };
 
   if (!dry) await setPhase(key, "scanning");
 
-  // Stage "Won" real de cada pipeline, para poder reportar la segunda señal.
-  const pdata = await gget(BASE + "/opportunities/pipelines?locationId=" + loc, gkey);
+  // Stage "Won" real de cada pipeline, para poder reportar la segunda señal. Un
+  // pedido por location que tenga algún pipeline de esta persona.
+  const usedLocs = [...new Set(pipes.map((p) => p.location || primary))].filter((id) => locs[id]);
   const wonStage: Record<string, string | null> = {};
   const pname: Record<string, string> = {};
-  for (const p of (pdata?.pipelines ?? [])) {
-    wonStage[p.id] = (p.stages || []).find((s: any) => /^won$|ganad/i.test((s.name || "").trim()))?.id || null;
-    pname[p.id] = p.name || "";
-  }
+  await Promise.all(usedLocs.map(async (id) => {
+    const pdata = await gget(BASE + "/opportunities/pipelines?locationId=" + id, locs[id].key);
+    for (const p of (pdata?.pipelines ?? [])) {
+      wonStage[p.id] = (p.stages || []).find((s: any) => /^won$|ganad/i.test((s.name || "").trim()))?.id || null;
+      pname[p.id] = p.name || "";
+    }
+  }));
 
   // ---- fase 1 ----
   type Row = { opportunity_id: string; pipeline_id: string; contact_id: string | null;
-               won_src: string; stage_id: string | null; won_at: string | null };
+               won_src: string; stage_id: string | null; won_at: string | null; location: string };
   const found: Row[] = [];
-  const perPipe: Record<string, { name: string; total: number; byStatus: number; byStage: number }> = {};
+  const perPipe: Record<string, { name: string; location: string; total: number; byStatus: number; byStage: number; error?: string }> = {};
 
   await pool(pipes, 6, async (p) => {
     const pid = p.pipeline_id;
-    perPipe[pid] = { name: pname[pid] || p.pipeline_name || pid, total: 0, byStatus: 0, byStage: 0 };
-    let url: string | undefined = BASE + "/opportunities/search?location_id=" + loc + "&pipeline_id=" + pid +
+    const loc = locs[p.location || primary];
+    perPipe[pid] = { name: pname[pid] || p.pipeline_name || pid, location: locLabel(cfg, p.location || primary),
+      total: 0, byStatus: 0, byStage: 0 };
+    // Sin key no hay forma de leerlo: se dice, en vez de mostrar 0 ganados.
+    if (!loc) { perPipe[pid].error = "la location de este pipeline no tiene key en sms_analytics.config"; return; }
+    let url: string | undefined = BASE + "/opportunities/search?location_id=" + loc.id + "&pipeline_id=" + pid +
       "&status=all&limit=100&order=added_desc";
     let pg = 0;
     while (url && pg < 200 && Date.now() < deadline) {
-      const d = await gget(url, gkey); if (!d) break;
+      const d = await gget(url, loc.key); if (!d) break;
       const ops = d.opportunities ?? []; if (!ops.length) break;
       perPipe[pid].total += ops.length;
       for (const o of ops) {
@@ -2525,6 +2576,7 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
           won_src: byStatus && byStage ? "both" : byStatus ? "status" : "stage",
           stage_id: o.pipelineStageId || null,
           won_at: o.lastStatusChangeAt || o.updatedAt || o.createdAt || null,
+          location: loc.id,
         });
       }
       url = d.meta?.nextPageUrl; pg++;
@@ -2544,15 +2596,16 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
     for (let i = 0; i < found.length; i += 200) {
       const chunk = found.slice(i, i + 200);
       const vals = chunk.map((_, j) => {
-        const b = j * 6;
-        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6}::timestamptz)`;
+        const b = j * 7;
+        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6}::timestamptz,$${b + 7})`;
       }).join(",");
-      const args = chunk.flatMap((f) => [f.opportunity_id, f.pipeline_id, f.contact_id, f.won_src, f.stage_id, f.won_at]);
+      const args = chunk.flatMap((f) => [f.opportunity_id, f.pipeline_id, f.contact_id, f.won_src, f.stage_id, f.won_at, f.location]);
       await c.queryArray(
-        `insert into sms_analytics.persona_won_opp(opportunity_id,pipeline_id,contact_id,won_src,stage_id,won_at)
+        `insert into sms_analytics.persona_won_opp(opportunity_id,pipeline_id,contact_id,won_src,stage_id,won_at,location)
          values ${vals}
          on conflict (opportunity_id) do update set won_src=excluded.won_src, stage_id=excluded.stage_id,
-           contact_id=coalesce(excluded.contact_id, sms_analytics.persona_won_opp.contact_id), seen_at=now()`, args);
+           contact_id=coalesce(excluded.contact_id, sms_analytics.persona_won_opp.contact_id),
+           location=excluded.location, seen_at=now()`, args);
     }
     for (const pid of Object.keys(wonStage)) {
       if (wonStage[pid]) await c.queryArray(
@@ -2571,19 +2624,22 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
             select o.opportunity_id from sms_analytics.persona_won_opp o
             join sms_analytics.persona_pipeline p on p.pipeline_id = o.pipeline_id and p.persona_key = $1
             where not o.expanded and o.attempts < 3 and o.contact_id is not null
+              and o.location = any($2::text[])
             order by o.attempts, o.opportunity_id limit 20 for update skip locked)
-          returning opportunity_id, pipeline_id, contact_id`, [key]);
+          returning opportunity_id, pipeline_id, contact_id, location`, [key, Object.keys(locs)]);
       return r.rows;
     });
     if (!batch.length) break;
 
     const results = await pool(batch, 6, async (o: any) => {
-      const cd = await gget(BASE + "/conversations/search?locationId=" + loc + "&contactId=" + o.contact_id, gkey);
+      const loc = locs[o.location];
+      if (!loc) return null;
+      const cd = await gget(BASE + "/conversations/search?locationId=" + loc.id + "&contactId=" + o.contact_id, loc.key);
       const convs = cd?.conversations ?? [];
       const ghlCalls: any[] = [];    // TYPE_CALL: grabación en GHL -> Deepgram (cuesta)
       const retellCalls: any[] = []; // TYPE_CUSTOM_CALL de Retell: transcripción nativa (gratis)
       for (const cv of convs.slice(0, 3)) {
-        const md = await gget(BASE + "/conversations/" + cv.id + "/messages?limit=100", gkey);
+        const md = await gget(BASE + "/conversations/" + cv.id + "/messages?limit=100", loc.key);
         for (const m of (md?.messages?.messages ?? [])) {
           if (m.status !== "completed") continue; // deja fuera los voicemails del setter
           if (m.messageType === "TYPE_CALL")
@@ -2615,11 +2671,11 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
         for (const p of r.picks) {
           const ins = await c.queryObject<{ id: bigint }>(
             `insert into sms_analytics.call_transcript
-               (pipeline_id,opportunity_id,contact_id,conversation_id,message_id,rec_index,call_at,duration_s,source,ext_id)
-             values ($1,$2,$3,$4,$5,1,$6::timestamptz,$7,$8,$9)
+               (pipeline_id,opportunity_id,contact_id,conversation_id,message_id,rec_index,call_at,duration_s,source,ext_id,location)
+             values ($1,$2,$3,$4,$5,1,$6::timestamptz,$7,$8,$9,$10)
              on conflict (message_id, rec_index) do nothing
              returning id`,
-            [r.o.pipeline_id, r.o.opportunity_id, r.o.contact_id, p.conv, p.id, p.at, p.dur, p.source, p.ext]);
+            [r.o.pipeline_id, r.o.opportunity_id, r.o.contact_id, p.conv, p.id, p.at, p.dur, p.source, p.ext, r.o.location]);
           if (ins.rows.length) queued++; else alreadyQueued++;
         }
         if (r.picks.length) withCalls++; else noCalls++;
@@ -2635,7 +2691,8 @@ async function personaScan(cfg: Record<string, string>, key: string, budgetMs: n
     const r = await c.queryObject<{ n: bigint }>(
       `select count(*)::bigint as n from sms_analytics.persona_won_opp o
          join sms_analytics.persona_pipeline p on p.pipeline_id=o.pipeline_id and p.persona_key=$1
-        where not o.expanded and o.attempts < 3`, [key]);
+        where not o.expanded and o.attempts < 3 and o.contact_id is not null
+          and o.location = any($2::text[])`, [key, Object.keys(locs)]);
     return Number(r.rows[0].n);
   });
   await setPhase(key, remaining ? "scanning" : "transcribing",
@@ -2987,7 +3044,7 @@ async function personaBuild(cfg: Record<string, string>, key: string, force = fa
     const cf = await c.queryObject<any>(
       `select key,label,headline,min_sample from sms_analytics.persona_config where key=$1`, [key]);
     const pp = await c.queryObject<any>(
-      `select pipeline_id as id, pipeline_name as name from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
+      `select pipeline_id as id, pipeline_name as name, location from sms_analytics.persona_pipeline where persona_key=$1`, [key]);
     const ex = await c.queryObject<any>(
       `select o.extract from sms_analytics.persona_won_opp o
          join sms_analytics.persona_pipeline p on p.pipeline_id=o.pipeline_id and p.persona_key=$1
@@ -3008,7 +3065,12 @@ async function personaBuild(cfg: Record<string, string>, key: string, force = fa
          join sms_analytics.persona_pipeline p on p.pipeline_id=t.pipeline_id and p.persona_key=$1
         where t.status in ('queued','running')`, [key]);
     const nPend = Number(pend.rows[0]?.n || 0);
-    return { cfgRow: cf.rows[0], pipelines: pp.rows, extracts: ex.rows.map((r: any) => r.extract),
+    // Con pipelines de dos locations el nombre solo no alcanza (hay un CENTURY
+    // CLOSING en cada una): el documento dice de cuál es cada uno.
+    const mixed = new Set(pp.rows.map((p: any) => p.location)).size > 1;
+    const pipelines = pp.rows.map((p: any) => ({ id: p.id,
+      name: (p.name || p.id) + (mixed ? " (" + locLabel(cfg, p.location) + ")" : "") }));
+    return { cfgRow: cf.rows[0], pipelines, extracts: ex.rows.map((r: any) => r.extract),
              sources: src.rows, words: Number(w.rows[0]?.w || 0),
              current: cur.rows[0] ? { n: Number(cur.rows[0].n_calls) } : null,
              pendingWhy: nPend ? nPend + " llamadas sin transcribir" : null };
@@ -3135,7 +3197,7 @@ Deno.serve(async (req) => {
       return json(await generate(cfg, body));
     }
     if (action === "insight_ai") return json(await insightAi(cfg, url.searchParams.get("win") || "30"));
-    if (action === "personas") return json(await personas());
+    if (action === "personas") return json(await personas(cfg));
     if (action === "ghl_pipelines") return json(await ghlPipelines(cfg));
     if (action === "ghl_workflows") return json(await ghlWorkflows(cfg));
     if (action === "workflow_add") {
@@ -3150,7 +3212,7 @@ Deno.serve(async (req) => {
     if (action === "persona_status") return json(await personaStatus(url.searchParams.get("key") || "mca"));
     if (action === "persona_save") {
       const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
-      return json(await personaSave(body));
+      return json(await personaSave(cfg, body));
     }
     if (action === "persona_scan") {
       const budget = Math.min(Number(url.searchParams.get("ms") || 100000), 130000);
