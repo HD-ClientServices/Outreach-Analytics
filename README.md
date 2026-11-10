@@ -176,8 +176,9 @@ La secuencia de CC de GHL 2 (`cc_ghl2`) **no tiene copies en `OFFICIAL`, a prop�
 de mensajes muestra lo que salió bajo el tag, así la rama B del A/B test aparece sola en vez de
 quedar filtrada contra el guion de la A. El split de ese workflow pone **`path a` / `path b`**
 (no `rama`), y el clasificador acepta las dos palabras: la letra es la rama. Hasta el 10/11 solo
-leía `rama X`, así que los contactos de GHL 2 procesados antes del arreglo quedaron sin rama y hay
-que re-sembrar esa location (`?action=seed&loc=oFkuULV6csxWj4T6RdT6`) para que la recuperen.
+leía `rama X`; ese día se re-sembró GHL 2 (`?action=seed&loc=oFkuULV6csxWj4T6RdT6`) para que los
+contactos ya procesados recuperaran la rama. Fuera de cold y defdec la rama sale **solo** del tag:
+un contacto sin tag va a "No branch", nunca se adivina por el texto.
 
 Dos consecuencias que conviene decir en voz alta:
 
@@ -397,10 +398,11 @@ Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
   contactos de GHL 2 y se re-encolaron 16.537 filas de GHL 1 de secuencias medidas que no tenían
   `phone_key` (las procesó la versión anterior), para que la deduplicación las alcance. El cron
   lo drena en lotes; mientras tanto el dashboard sigue mostrando el snapshot anterior.
-- **El A/B de `cc_ghl2` necesita re-sembrar GHL 2 una vez.** Su split pone `path a` / `path b`, y
-  hasta el arreglo del 10/11 el clasificador solo leía `rama X`: los contactos de GHL 2 que se
-  procesaron antes quedaron con `branch='-'`. `?action=seed&loc=oFkuULV6csxWj4T6RdT6` los vuelve a
-  bajar (~3.500 contactos, ~20 min de drenado); hasta entonces el desglose por rama sale vacío.
+- **El A/B de `cc_ghl2` arrancó a etiquetar hace poco.** Su split pone `path a` / `path b` desde
+  ~05/11; los contactos que entraron antes no tienen tag y salen como "No branch" (en la ventana
+  de 30 días, ~63% al 10/11). Se corrige solo a medida que la ventana avanza. GHL 2 se re-sembró
+  el 10/11 después del arreglo de `path X`, así que no hay contactos con el tag puesto y la rama
+  perdida.
 - **La fila `cc` (GHL 1) queda en Performance** con 0 ingresos en 7 días: es el histórico hasta el
   26/10 y se vacía sola cuando sus contactos salgan de la ventana (~28/11). Se puede sacar con
   "Stop measuring" después.

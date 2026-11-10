@@ -1090,7 +1090,8 @@ function branchSourceRow(s){
   var rec = s.tagPctRecent;
   var txt, cls;
   if(reading){
-    txt='Branches read from the <b>rama</b> / <b>path</b> tag ('+s.tagPct+'% of contacts tagged).';
+    txt='Branches read from the <b>rama</b> / <b>path</b> tag ('+s.tagPct+'% of contacts tagged'
+       +(s.tagPct!=null&&s.tagPct<90?'; untagged contacts show as No branch':'')+').';
     cls='';
   }else{
     txt='⚠ Branches <b>guessed from the message text</b> — only '+(s.tagPct||0)+'% of these contacts carry a <b>rama</b> / <b>path</b> tag. '

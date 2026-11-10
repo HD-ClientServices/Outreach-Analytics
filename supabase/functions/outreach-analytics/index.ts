@@ -1089,6 +1089,10 @@ function msgBranchOf(tagBr: string | null, wf: string, tmpl: string | null): str
   return "-";
 }
 
+// Secuencias cuya rama de contacto puede salir del texto cuando falta el tag (ver
+// el `case` de contactBranchTable). Para el resto, rama = tag o nada.
+const TEXT_BRANCH_WF = new Set(["cold", "defdec"]);
+
 // Resuelve la rama del CONTACTO a partir de lo que guarda contact_br.
 function branchOf(tagBr: string | null, wf: string, tmpl: string | null): string {
   if (tagBr && tagBr !== "-") return tagBr;
@@ -1274,8 +1278,13 @@ async function build(cfg?: Record<string, string>) {
           const rc = byRecent[w.key];
           const tagPct = s.ing ? Math.round(1000 * s.tagged / s.ing) / 10 : null;
           const tagPctRecent = rc && rc.n >= 20 ? Math.round(1000 * rc.tagged / rc.n) / 10 : null;
+          // Solo cold y defdec tienen respaldo por texto (contactBranchTable); en
+          // el resto la rama sale únicamente del tag, y un contacto sin tag queda
+          // en "No branch", no adivinado. Sin esto CC GHL 2 —split nuevo, 37% de
+          // la ventana etiquetada— salía como "guessed branches" pidiendo tags
+          // que el workflow ya pone.
           const branchSource = !branches.length ? "none"
-            : (tagPct != null && tagPct >= 90 ? "tag" : "text");
+            : (!TEXT_BRANCH_WF.has(w.key) || (tagPct != null && tagPct >= 90) ? "tag" : "text");
           return { key: w.key, label: w.label, location: w.location, loc: locLabel(cfg || {}, w.location),
             ing: s.ing, lt: s.lt,
             cr: s.ing ? Math.round(10000 * s.lt / s.ing) / 100 : null,
