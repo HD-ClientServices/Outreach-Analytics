@@ -1080,7 +1080,7 @@ function tagChip(s){
   // Si el workflow ya está poniendo el tag, lo adivinado es sólo el histórico que
   // sigue dentro de la ventana: eso se corrige solo y no amerita alarma.
   if(s.tagPctRecent!=null&&s.tagPctRecent>=90) return "";
-  return '<span class="chip chip-warn" title="These branches are guessed from the first message, not read from a rama tag">guessed branches</span>';
+  return '<span class="chip chip-warn" title="These branches are guessed from the first message, not read from a rama / path tag">guessed branches</span>';
 }
 function branchSourceRow(s){
   if(!s.branchSource||s.branchSource=="none") return "";
@@ -1090,10 +1090,10 @@ function branchSourceRow(s){
   var rec = s.tagPctRecent;
   var txt, cls;
   if(reading){
-    txt='Branches read from the <b>rama</b> tag ('+s.tagPct+'% of contacts tagged).';
+    txt='Branches read from the <b>rama</b> / <b>path</b> tag ('+s.tagPct+'% of contacts tagged).';
     cls='';
   }else{
-    txt='⚠ Branches <b>guessed from the message text</b> — only '+(s.tagPct||0)+'% of these contacts carry a <b>rama</b> tag. '
+    txt='⚠ Branches <b>guessed from the message text</b> — only '+(s.tagPct||0)+'% of these contacts carry a <b>rama</b> / <b>path</b> tag. '
        +'Add an <b>Add Tag</b> action inside each branch of this workflow in GoHighLevel.';
     cls=' src-warn';
     if(rec!=null&&rec>=90)

@@ -145,7 +145,12 @@ const WF_FALLBACK: typeof WF = [
 //
 // Solo compiten los workflows de la location del contacto: los tags son de cada
 // location, y GHL 1 y GHL 2 tienen los dos un `secuencia partner cc`.
-const BRANCH_TAG_RE = /^rama\s*[a-z]$/;
+//
+// El tag de rama es `rama a` / `rama b` en GHL 1 y `path a` / `path b` en GHL 2:
+// el split de PARTNER SEQUENCE - CREDIT CARD se armó con `path`. Se aceptan los dos
+// en las dos locations (GHL 1 no tiene ningún tag `path …`, revisado el 10/11);
+// la letra es la rama.
+const BRANCH_TAG_RE = /^(?:rama|path)\s*([a-z])$/;
 
 function seqFromTags(tags: string[], location: string): string {
   for (const w of WF) {
@@ -174,10 +179,14 @@ async function contactInfo(contactId: string, loc: Loc): Promise<{ sequence: str
   if (!r.data) return [400, 404, 422].includes(r.status) ? { sequence: "none", branch: "-", phoneKey: "" } : null;
   const ct = r.data.contact || r.data;
   const tags = (ct.tags || []).map((t: any) => (typeof t === "string" ? t : t.name || "").toLowerCase());
-  const branchTag = tags.find((t: string) => BRANCH_TAG_RE.test(t));
+  let branch = "-";
+  for (const t of tags) {
+    const m = BRANCH_TAG_RE.exec(t);
+    if (m) { branch = m[1]; break; }
+  }
   return {
     sequence: seqFromTags(tags, loc.id),
-    branch: branchTag ? (branchTag.split(/\s+/)[1] || "-") : "-",
+    branch,
     phoneKey: await phoneKeyOf(ct.phone),
   };
 }

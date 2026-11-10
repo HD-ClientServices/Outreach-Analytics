@@ -160,7 +160,7 @@ El contrato son dos tags, y el nombre lo elige el sistema — si se escribe dist
 | Tag | Dónde va | Para qué |
 |---|---|---|
 | `secuencia <nombre del workflow>` | Primera acción del workflow, antes del 1er mensaje | Marca a qué secuencia pertenece el contacto |
-| `rama a`, `rama b`, … | Dentro de **cada** rama del split | Separa las ramas del A/B test |
+| `rama a`, `rama b`, … (o `path a`, `path b`, …) | Dentro de **cada** rama del split | Separa las ramas del A/B test |
 
 El tag lo deriva `tagFromName()` del nombre del workflow (sin acentos ni emojis, cortado en
 palabras enteras) y se desambigua con un sufijo si ya existe. La prioridad, cuando un contacto
@@ -174,8 +174,10 @@ UI no puede adivinar el tag de fin: si el workflow lo cambia, hay que sumarlo a 
 
 La secuencia de CC de GHL 2 (`cc_ghl2`) **no tiene copies en `OFFICIAL`, a propósito**: su tabla
 de mensajes muestra lo que salió bajo el tag, así la rama B del A/B test aparece sola en vez de
-quedar filtrada contra el guion de la A. Para que el A/B se vea partido, cada rama del split del
-workflow de GHL 2 tiene que poner `rama a` / `rama b` (hoy esos tags no existen en GHL 2).
+quedar filtrada contra el guion de la A. El split de ese workflow pone **`path a` / `path b`**
+(no `rama`), y el clasificador acepta las dos palabras: la letra es la rama. Hasta el 10/11 solo
+leía `rama X`, así que los contactos de GHL 2 procesados antes del arreglo quedaron sin rama y hay
+que re-sembrar esa location (`?action=seed&loc=oFkuULV6csxWj4T6RdT6`) para que la recuperen.
 
 Dos consecuencias que conviene decir en voz alta:
 
@@ -395,6 +397,10 @@ Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
   contactos de GHL 2 y se re-encolaron 16.537 filas de GHL 1 de secuencias medidas que no tenían
   `phone_key` (las procesó la versión anterior), para que la deduplicación las alcance. El cron
   lo drena en lotes; mientras tanto el dashboard sigue mostrando el snapshot anterior.
+- **El A/B de `cc_ghl2` necesita re-sembrar GHL 2 una vez.** Su split pone `path a` / `path b`, y
+  hasta el arreglo del 10/11 el clasificador solo leía `rama X`: los contactos de GHL 2 que se
+  procesaron antes quedaron con `branch='-'`. `?action=seed&loc=oFkuULV6csxWj4T6RdT6` los vuelve a
+  bajar (~3.500 contactos, ~20 min de drenado); hasta entonces el desglose por rama sale vacío.
 - **La fila `cc` (GHL 1) queda en Performance** con 0 ingresos en 7 días: es el histórico hasta el
   26/10 y se vacía sola cuando sus contactos salgan de la ventana (~28/11). Se puede sacar con
   "Stop measuring" después.
