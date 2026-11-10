@@ -23,11 +23,17 @@ let WF: { key: string; label: string; re: RegExp; keywords: string[]; tags: stri
 // pero no se lee. Los nombres son "GHL 1" / "GHL 2": nunca "MCA", "Kate" ni "tarjeta".
 type Loc = { n: number; id: string; key: string; label: string };
 
+// La key se carga a mano en el SQL editor: si se pega con comillas o con el
+// "Bearer " del header, GHL la rechaza y lo único que se ve es "no devolvió nada".
+function cleanKey(v: unknown): string {
+  return String(v || "").trim().replace(/^["'`]+|["'`]+$/g, "").replace(/^bearer\s+/i, "").trim();
+}
+
 function locsOf(cfg: Record<string, string>): Loc[] {
   const out: Loc[] = [];
   const add = (n: number, idK: string, keyK: string) => {
     const id = String(cfg[idK] || "").trim();
-    if (id && !out.some((l) => l.id === id)) out.push({ n, id, key: String(cfg[keyK] || "").trim(), label: "GHL " + n });
+    if (id && !out.some((l) => l.id === id)) out.push({ n, id, key: cleanKey(cfg[keyK]), label: "GHL " + n });
   };
   add(1, "ghl_location", "ghl_api_key");
   for (const k of Object.keys(cfg)) {
@@ -351,19 +357,36 @@ async function ghlSlot(key: string) {
 
 // `status` distingue "GHL no contestó" (0/429/5xx: reintentar más tarde) de "no
 // existe" (400/404/422: el contacto se borró), que gget solo no puede decir.
-async function gfetch(url: string, key: string, tries = 5): Promise<{ status: number; data: any }> {
-  let status = 0;
+// `why` es lo que GHL explicó al rechazar ("Invalid JWT", "The token is not
+// authorized for this scope"...): sin eso, una key mal cargada se veía igual que
+// una location vacía. Se le tacha la key por si GHL la llegara a repetir.
+async function gfetch(url: string, key: string, tries = 5): Promise<{ status: number; data: any; why?: string }> {
+  let status = 0, why = "";
+  const scrub = async (r: Response) => {
+    const t = (await r.text().catch(() => "")).replace(/\s+/g, " ").trim();
+    let msg = t;
+    try { const j = JSON.parse(t); msg = String(j.message || j.error || j.msg || t); } catch (_) { /* texto plano */ }
+    return (key ? msg.split(key).join("***") : msg).slice(0, 160);
+  };
   for (let i = 0; i < tries; i++) {
     try {
       await ghlSlot(key);
       const r = await fetch(url, { headers: { Authorization: "Bearer " + key, Version: VER } });
       status = r.status;
       if (r.status === 200) return { status, data: await r.json() };
+      why = await scrub(r);
       if ([429, 403, 502, 503].includes(r.status)) { await sleep(1200 + i * 1200); continue; }
-      return { status, data: null };
-    } catch (_) { await sleep(800 + i * 800); }
+      return { status, data: null, why };
+    } catch (e) { why = String(e).slice(0, 160); await sleep(800 + i * 800); }
   }
-  return { status, data: null };
+  return { status, data: null, why };
+}
+// "GHL 401: Invalid JWT" — para mostrar en la UI por qué una location no se leyó.
+function ghlWhy(r: { status: number; why?: string }): string {
+  if (!r.status) return "GHL no respondió" + (r.why ? " (" + r.why + ")" : "");
+  const hint = r.status === 401 ? " — el token no es válido o es de otra cuenta"
+    : r.status === 403 ? " — el token no tiene acceso a esta location o le falta el permiso" : "";
+  return "GHL " + r.status + (r.why ? ": " + r.why : "") + hint;
 }
 async function gget(url: string, key: string, tries = 5): Promise<any> {
   return (await gfetch(url, key, tries)).data;
@@ -1988,14 +2011,14 @@ async function personas(cfg: Record<string, string>) {
 async function ghlPipelines(cfg: Record<string, string>) {
   const all = locsOf(cfg);
   const lists = await Promise.all(all.filter((l) => l.key).map(async (l) => {
-    const d = await gget(BASE + "/opportunities/pipelines?locationId=" + l.id, l.key);
-    return { l, pls: (d?.pipelines ?? []) as any[] };
+    const r = await gfetch(BASE + "/opportunities/pipelines?locationId=" + l.id, l.key);
+    return { l, pls: (r.data?.pipelines ?? []) as any[], why: r.data ? "GHL no devolvió pipelines" : ghlWhy(r) };
   }));
   const locStatus = all.map((l) => {
     const got = lists.find((x) => x.l.id === l.id);
     return { id: l.id, label: l.label, ok: !!(got && got.pls.length),
       error: !l.key ? "falta ghl_api_key" + (l.n === 1 ? "" : "_" + l.n) + " en sms_analytics.config"
-           : (!got || !got.pls.length ? "GHL no devolvió pipelines (¿token o location?)" : null) };
+           : (!got || !got.pls.length ? (got ? got.why : "GHL no devolvió pipelines") : null) };
   });
   const pipelines: any[] = [];
   for (const { l, pls } of lists) for (const p of pls) pipelines.push({
@@ -2072,14 +2095,14 @@ async function ghlWorkflows(cfg: Record<string, string>) {
   const all = locsOf(cfg);
   const locs = all.filter((l) => l.key);
   const lists = await Promise.all(locs.map(async (l) => {
-    const d = await gget(BASE + "/workflows/?locationId=" + l.id, l.key);
-    return { l, list: (d?.workflows ?? []) as any[] };
+    const r = await gfetch(BASE + "/workflows/?locationId=" + l.id, l.key);
+    return { l, list: (r.data?.workflows ?? []) as any[], why: r.data ? "GHL no devolvió workflows" : ghlWhy(r) };
   }));
   const locStatus = all.map((l) => {
     const got = lists.find((x) => x.l.id === l.id);
     return { id: l.id, label: l.label, ok: !!(got && got.list.length),
       error: !l.key ? "falta ghl_api_key" + (l.n === 1 ? "" : "_" + l.n) + " en sms_analytics.config"
-           : (!got || !got.list.length ? "GHL no devolvió workflows (¿token o location?)" : null) };
+           : (!got || !got.list.length ? (got ? got.why : "GHL no devolvió workflows") : null) };
   });
   if (!lists.some((x) => x.list.length)) return { error: "GHL no devolvió workflows (¿token o location?)", locations: locStatus };
 
