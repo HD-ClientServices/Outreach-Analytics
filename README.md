@@ -326,6 +326,19 @@ rotuladas, no series superpuestas.
 > Railway (`server.js` + `Dockerfile`, en `outreach-analytics-production.up.railway.app`).
 > `application/json` sí pasa intacto.
 
+> **Un push a `main` NO publica el dashboard.** El workflow de GitHub solo despliega la edge
+> function; Railway no está conectado al repo. Entre el 14/08 y el 10/11/2026 producción sirvió
+> el `index.html` de agosto sin que nadie lo notara. Para publicar, desde un checkout parado
+> en `main`:
+>
+> ```bash
+> railway up . --path-as-root --ci -m "dashboard de main <sha>"
+> ```
+>
+> El `. --path-as-root` importa: sin eso la CLI sube la carpeta **vinculada** (el checkout
+> principal), no la actual — desde un worktree publica lo que haya en el checkout principal.
+> Para confirmar: `curl -s https://outreach-analytics-production.up.railway.app/ | cmp - dashboard/index.html`.
+
 ---
 
 ## Números actuales (30 días)
