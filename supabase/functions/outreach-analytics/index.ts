@@ -601,7 +601,16 @@ async function refresh(cfg: Record<string, string>) {
     return { counts, marks };
   });
 
-  const jobs = await Promise.all(locs.map(async (l) => {
+  // Sembrar una location nueva y, en el mismo request, ponerse al día con las
+  // demás se pasó del tope de cómputo de la edge function (WORKER_RESOURCE_LIMIT,
+  // 10/11/2026, al sumar GHL 2): el mismo trabajo partido en dos requests anduvo.
+  // Si hay una location por sembrar, este refresh hace SOLO eso; las demás se
+  // ponen al día en el próximo (el dashboard lo dice con `next`).
+  const toSeed = locs.filter((l) => !(st.counts[l.id] > 0));
+  const run = toSeed.length ? [toSeed[0]] : locs;
+  const waiting = locs.filter((l) => !run.includes(l)).map((l) => l.label);
+
+  const jobs = await Promise.all(run.map(async (l) => {
     if (!(st.counts[l.id] > 0)) {
       const e = await enumWindow(l, t0, deadline);
       return { l, mode: "seed", contacts: e.contacts, guard: seedGuard(l, e, 0) };
@@ -664,7 +673,8 @@ async function refresh(cfg: Record<string, string>) {
       await c.queryArray("commit");
     } catch (e) { await c.queryArray("rollback").catch(() => {}); throw e; }
   });
-  return { mode: "per-location", delta, healed, locations: out, elapsedMs: Date.now() - t0 };
+  return { mode: "per-location", delta, healed, locations: out,
+    ...(waiting.length ? { next: "refresh", waiting } : {}), elapsedMs: Date.now() - t0 };
 }
 
 // ---- MARKWON: marca cohort.won desde oportunidades ganadas (numerador LT) ----

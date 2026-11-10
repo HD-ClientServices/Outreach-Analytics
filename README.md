@@ -98,7 +98,7 @@ Dos niveles de acceso (ver [Seguridad](#seguridad)):
 | `?action=seed` | operador | Arma la cohorte con las conversaciones de los últimos 30d de cada location. **Trunca `cohort` y `msg_events`.** `&loc=<location id>` re-siembra solo esa location y deja las demás intactas. |
 | `?action=work&ms=100000` | operador | Procesa una tanda acotada por tiempo. Devuelve `{processed, remaining}`. Al llegar a 0 dispara `build` solo. |
 | `?action=build` | operador | Recalcula las 3 ventanas e inserta en `snapshots_v2`. |
-| `?action=refresh` | operador | Actualización incremental on-demand, location por location. Una location **sin filas** en la cohorte (la primera vez que se configura) se siembra entera en el mismo request. |
+| `?action=refresh` | operador | Actualización incremental on-demand, location por location. Una location **sin filas** en la cohorte (la primera vez que se configura) se siembra sola en ese request; las demás se ponen al día en el refresh siguiente (la respuesta trae `next: "refresh"`). |
 | `?action=generate` / `insight_ai` | operador | Llaman a la API de Anthropic (**gastan plata**). |
 | `?action=status` | lectura | Progreso del backfill, total y por location (`locations[]`: total, done, pending, failed y si le falta la key). |
 | `?action=data` | lectura | Último snapshot. Lo consume el dashboard. |
@@ -134,8 +134,18 @@ mientras una espera su cupo la otra sigue. Si GHL no contesta, el contacto queda
 reintenta (hasta 3 veces) en vez de darse por procesado sin secuencia, que es lo que pasaba antes.
 
 Para sumar **una location nueva** no hace falta un seed: cargar `ghl_location_n` + `ghl_api_key_n`
-en `config` y apretar **↻ Refresh**. Como esa location no tiene filas, el refresh la siembra
-entera y el cron la drena.
+en `config` y apretar **↻ Refresh** dos veces. El primero ve que esa location no tiene filas y
+la siembra **sola**; el segundo pone al día a las demás. El cron drena lo que encolen.
+
+La key es un **Private Integration token** creado dentro de esa sub-cuenta (`pit-…`, 40
+caracteres). La "API Key" de Business Profile es de la API v1 y GHL la rechaza con
+`401 Invalid JWT`: `?action=ghl_workflows` → `locations[].error` muestra la respuesta de GHL.
+
+> ⚠️ **Lección del 10/11/2026.** El primer refresh con GHL 2 sembraba GHL 2 y, en el mismo
+> request, ponía al día GHL 1: murió con `WORKER_RESOURCE_LIMIT` (tope de cómputo de la edge
+> function). La transacción lo revirtió entero, así que no quedó nada a medias. El mismo trabajo
+> en dos requests (`?action=seed&loc=<GHL 2>` y después `?action=refresh`) anduvo: 12s y 131s.
+> Por eso ahora el refresh siembra una location nueva sola.
 
 ### Sumar una secuencia nueva
 
@@ -381,11 +391,10 @@ Antes de meter esto en `app.tryintro.com`, decidir si debe leer de esas tablas.
 
 ### 4. Lo que deja la segunda location
 
-- **El primer refresh después del deploy es pesado, una sola vez:** siembra GHL 2 (todos sus
-  contactos con conversación en los últimos 30 días) y re-encola las filas de GHL 1 de
-  secuencias medidas que todavía no tienen `phone_key` (las procesó la versión anterior), para
-  que la deduplicación las alcance. El cron lo drena en lotes; mientras tanto el dashboard sigue
-  mostrando el snapshot anterior.
+- **La primera ingesta de GHL 2 fue pesada, una sola vez (10/11/2026):** se sembraron 3.512
+  contactos de GHL 2 y se re-encolaron 16.537 filas de GHL 1 de secuencias medidas que no tenían
+  `phone_key` (las procesó la versión anterior), para que la deduplicación las alcance. El cron
+  lo drena en lotes; mientras tanto el dashboard sigue mostrando el snapshot anterior.
 - **La fila `cc` (GHL 1) queda en Performance** con 0 ingresos en 7 días: es el histórico hasta el
   26/10 y se vacía sola cuando sus contactos salgan de la ventana (~28/11). Se puede sacar con
   "Stop measuring" después.
